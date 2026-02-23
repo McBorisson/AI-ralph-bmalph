@@ -47,6 +47,7 @@ The instructions file depends on the configured platform — see `src/platform/`
 | `bmalph check-updates` | Check for upstream updates                |
 | `bmalph status`        | Show project installation status          |
 | `bmalph implement`     | Transition BMAD artifacts to Ralph format |
+| `bmalph reset`         | Remove all bmalph files from the project  |
 
 ## Slash Commands
 
@@ -87,6 +88,8 @@ Use `bmalph implement` (or `/bmalph-implement`) to transition from BMAD planning
 - `src/commands/upgrade.ts` — CLI upgrade handler
 - `src/commands/doctor.ts` — CLI doctor handler
 - `src/commands/implement.ts` — CLI implement handler
+- `src/commands/reset.ts` — CLI reset handler
+- `src/reset.ts` — Reset plan-build + execute logic
 - `src/utils/state.ts` — Phase tracking + Ralph status reading
 - `src/utils/json.ts` — Safe JSON file reading with error discrimination
 - `src/utils/validate.ts` — Runtime config/state validation

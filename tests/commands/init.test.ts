@@ -84,7 +84,6 @@ describe("init command", () => {
 
     const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(output).toContain("bmalph upgrade");
-    expect(output).not.toContain("reset");
   });
 
   it("installs and writes config with CLI options", async () => {

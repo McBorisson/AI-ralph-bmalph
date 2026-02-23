@@ -30,6 +30,18 @@ describe("dryrun", () => {
       expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("skip"));
       expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("already exists"));
     });
+
+    it("logs delete action with path", () => {
+      logDryRunAction({ type: "delete", path: "_bmad/" });
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("delete"));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("_bmad/"));
+    });
+
+    it("logs warn action with path and reason", () => {
+      logDryRunAction({ type: "warn", path: "_bmad-output/", reason: "user artifacts" });
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("_bmad-output/"));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("user artifacts"));
+    });
   });
 
   describe("formatDryRunSummary", () => {
@@ -60,6 +72,27 @@ describe("dryrun", () => {
       expect(summary).toContain("Would skip:");
       expect(summary).toContain("CLAUDE.md");
       expect(summary).toContain("already integrated");
+    });
+
+    it("includes delete section when delete actions exist", () => {
+      const actions: DryRunAction[] = [
+        { type: "delete", path: "_bmad/" },
+        { type: "delete", path: ".ralph/" },
+      ];
+      const summary = formatDryRunSummary(actions);
+      expect(summary).toContain("Would delete:");
+      expect(summary).toContain("_bmad/");
+      expect(summary).toContain(".ralph/");
+    });
+
+    it("includes warnings section when warn actions exist", () => {
+      const actions: DryRunAction[] = [
+        { type: "warn", path: "_bmad-output/", reason: "user artifacts" },
+      ];
+      const summary = formatDryRunSummary(actions);
+      expect(summary).toContain("Warning");
+      expect(summary).toContain("_bmad-output/");
+      expect(summary).toContain("user artifacts");
     });
 
     it("ends with no-changes message", () => {

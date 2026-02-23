@@ -1,7 +1,7 @@
 import chalk from "chalk";
 
 export interface DryRunAction {
-  type: "create" | "modify" | "skip";
+  type: "create" | "modify" | "skip" | "delete" | "warn";
   path: string;
   reason?: string;
 }
@@ -20,6 +20,14 @@ export function logDryRunAction(action: DryRunAction): void {
         `${prefix} Would skip: ${chalk.dim(action.path)}${action.reason ? ` (${action.reason})` : ""}`
       );
       break;
+    case "delete":
+      console.log(`${prefix} Would delete: ${chalk.red(action.path)}`);
+      break;
+    case "warn":
+      console.log(
+        `${prefix} Warning: ${chalk.yellow(action.path)}${action.reason ? ` (${action.reason})` : ""}`
+      );
+      break;
   }
 }
 
@@ -31,9 +39,19 @@ export function formatDryRunSummary(actions: DryRunAction[]): string {
   const lines: string[] = [];
   lines.push(chalk.blue("\n[dry-run] Would perform the following actions:\n"));
 
+  const deletes = actions.filter((a) => a.type === "delete");
   const creates = actions.filter((a) => a.type === "create");
   const modifies = actions.filter((a) => a.type === "modify");
   const skips = actions.filter((a) => a.type === "skip");
+  const warns = actions.filter((a) => a.type === "warn");
+
+  if (deletes.length > 0) {
+    lines.push(chalk.red("Would delete:"));
+    for (const action of deletes) {
+      lines.push(`  ${action.path}`);
+    }
+    lines.push("");
+  }
 
   if (creates.length > 0) {
     lines.push(chalk.green("Would create:"));
@@ -54,6 +72,14 @@ export function formatDryRunSummary(actions: DryRunAction[]): string {
   if (skips.length > 0) {
     lines.push(chalk.dim("Would skip:"));
     for (const action of skips) {
+      lines.push(`  ${action.path}${action.reason ? ` (${action.reason})` : ""}`);
+    }
+    lines.push("");
+  }
+
+  if (warns.length > 0) {
+    lines.push(chalk.yellow("Warnings:"));
+    for (const action of warns) {
       lines.push(`  ${action.path}${action.reason ? ` (${action.reason})` : ""}`);
     }
     lines.push("");

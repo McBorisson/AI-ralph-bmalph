@@ -7,6 +7,7 @@ import { doctorCommand } from "./commands/doctor.js";
 import { checkUpdatesCommand } from "./commands/check-updates.js";
 import { statusCommand } from "./commands/status.js";
 import { implementCommand } from "./commands/implement.js";
+import { resetCommand } from "./commands/reset.js";
 import { setVerbose, setQuiet } from "./utils/logger.js";
 import { getPackageVersion } from "./installer.js";
 import { isEnoent } from "./utils/errors.js";
@@ -106,6 +107,15 @@ program
   .option("--force", "Override pre-flight validation errors")
   .action(async (opts) =>
     implementCommand({ ...opts, projectDir: await resolveAndValidateProjectDir() })
+  );
+
+program
+  .command("reset")
+  .description("Remove all bmalph files from the project")
+  .option("--dry-run", "Preview changes without removing files")
+  .option("--force", "Skip confirmation prompt")
+  .action(async (opts) =>
+    resetCommand({ ...opts, projectDir: await resolveAndValidateProjectDir() })
   );
 
 void program.parseAsync();

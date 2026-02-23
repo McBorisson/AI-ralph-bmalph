@@ -110,3 +110,17 @@ export async function runImplement(cwd: string, force = false): Promise<CliResul
   if (force) args.push("--force");
   return runCli(args, { cwd });
 }
+
+/**
+ * Run reset command with --force to skip confirmation
+ */
+export async function runReset(cwd: string): Promise<CliResult> {
+  return runCli(["reset", "--force"], { cwd });
+}
+
+/**
+ * Run reset with --dry-run flag
+ */
+export async function runResetDryRun(cwd: string): Promise<CliResult> {
+  return runCli(["reset", "--dry-run"], { cwd });
+}
