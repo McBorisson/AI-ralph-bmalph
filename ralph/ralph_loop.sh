@@ -1436,6 +1436,21 @@ main() {
         exit 1
     fi
 
+    # Check required dependencies
+    if ! command -v jq &> /dev/null; then
+        log_status "ERROR" "Required dependency 'jq' is not installed."
+        echo ""
+        echo "jq is required for JSON processing in the Ralph loop."
+        echo ""
+        echo "Install jq:"
+        echo "  macOS:   brew install jq"
+        echo "  Ubuntu:  sudo apt-get install jq"
+        echo "  Windows: choco install jq  (or: winget install jqlang.jq)"
+        echo ""
+        echo "After installing, run this command again."
+        exit 1
+    fi
+
     # Initialize session tracking before entering the loop
     init_session_tracking
 

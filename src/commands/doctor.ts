@@ -122,10 +122,10 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
   return { passed, failed };
 }
 
-async function checkBashAvailable(): Promise<boolean> {
+async function checkCommandAvailable(command: string): Promise<boolean> {
   const { execSync } = await import("child_process");
   try {
-    const cmd = process.platform === "win32" ? "where bash" : "which bash";
+    const cmd = process.platform === "win32" ? `where ${command}` : `which ${command}`;
     execSync(cmd, { stdio: "ignore" });
     return true;
   } catch {
@@ -148,16 +148,32 @@ async function checkNodeVersion(_projectDir: string): Promise<CheckResult> {
 }
 
 async function checkBash(_projectDir: string): Promise<CheckResult> {
-  const bashAvailable = await checkBashAvailable();
+  const available = await checkCommandAvailable("bash");
   return {
     label: "bash available",
-    passed: bashAvailable,
-    detail: bashAvailable ? undefined : "bash not found in PATH",
-    hint: bashAvailable
+    passed: available,
+    detail: available ? undefined : "bash not found in PATH",
+    hint: available
       ? undefined
       : process.platform === "win32"
         ? "Install Git Bash or WSL: https://git-scm.com/downloads"
         : "Install bash via your package manager (apt, brew, etc.)",
+  };
+}
+
+async function checkJq(_projectDir: string): Promise<CheckResult> {
+  const available = await checkCommandAvailable("jq");
+  return {
+    label: "jq available",
+    passed: available,
+    detail: available ? undefined : "jq not found in PATH",
+    hint: available
+      ? undefined
+      : process.platform === "win32"
+        ? "Install jq: choco install jq (or: winget install jqlang.jq)"
+        : process.platform === "darwin"
+          ? "Install jq: brew install jq"
+          : "Install jq: sudo apt-get install jq",
   };
 }
 
@@ -484,6 +500,7 @@ async function checkUpstreamGitHubStatus(_projectDir: string): Promise<CheckResu
 const CORE_CHECKS: CheckDefinition[] = [
   { id: "node-version", run: checkNodeVersion },
   { id: "bash-available", run: checkBash },
+  { id: "jq-available", run: checkJq },
   { id: "config-valid", run: checkConfig },
   { id: "bmad-dir", run: checkBmadDir },
   { id: "ralph-loop", run: checkRalphLoop },

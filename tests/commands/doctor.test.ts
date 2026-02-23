@@ -112,6 +112,33 @@ describe("doctor command", () => {
     });
   });
 
+  describe("jq available check", () => {
+    it("checks for jq availability", async () => {
+      await setupFullProject();
+      const { doctorCommand } = await import("../../src/commands/doctor.js");
+      await doctorCommand({ projectDir: testDir });
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+      expect(output).toContain("jq available");
+    });
+
+    it("passes when jq is installed", async () => {
+      await setupFullProject();
+      const { CHECK_REGISTRY } = await import("../../src/commands/doctor.js");
+      const jqCheck = CHECK_REGISTRY.find((c) => c.id === "jq-available")!;
+      expect(jqCheck).toBeDefined();
+
+      const result = await jqCheck.run(testDir);
+      expect(result.label).toBe("jq available");
+      // jq may or may not be installed in CI — just verify the shape
+      expect(typeof result.passed).toBe("boolean");
+      if (!result.passed) {
+        expect(result.detail).toBe("jq not found in PATH");
+        expect(result.hint).toBeDefined();
+      }
+    });
+  });
+
   describe("config.json check", () => {
     it("passes when config.json exists and is valid JSON", async () => {
       await setupFullProject();
@@ -910,7 +937,7 @@ describe("doctor command", () => {
       const { CHECK_REGISTRY } = await import("../../src/commands/doctor.js");
 
       expect(Array.isArray(CHECK_REGISTRY)).toBe(true);
-      expect(CHECK_REGISTRY.length).toBe(15);
+      expect(CHECK_REGISTRY.length).toBe(16);
 
       // All checks should have required properties
       for (const check of CHECK_REGISTRY) {
@@ -927,6 +954,7 @@ describe("doctor command", () => {
       const expectedIds = [
         "node-version",
         "bash-available",
+        "jq-available",
         "config-valid",
         "bmad-dir",
         "ralph-loop",
