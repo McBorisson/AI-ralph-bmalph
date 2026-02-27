@@ -308,15 +308,15 @@ extract_prd_tasks() {
         done <<< "$numbered_tasks"
     fi
 
-    # Look for headings that might be task sections
-    local headings
-    headings=$(grep -E '^#{1,3}[[:space:]]+(TODO|Tasks|Requirements|Features|Backlog|Sprint)' "$prd_file" 2>/dev/null)
-    if [[ -n "$headings" ]]; then
+    # Look for headings that might be task sections (with line numbers to handle duplicates)
+    local heading_lines
+    heading_lines=$(grep -nE '^#{1,3}[[:space:]]+(TODO|Tasks|Requirements|Features|Backlog|Sprint)' "$prd_file" 2>/dev/null)
+    if [[ -n "$heading_lines" ]]; then
         # Extract bullet items beneath each matching heading
-        while IFS= read -r heading; do
-            # Get line number of this heading
+        while IFS= read -r heading_entry; do
+            # Parse line number directly from grep -n output (avoids duplicate heading issue)
             local heading_line
-            heading_line=$(grep -nF "$heading" "$prd_file" | head -1 | cut -d: -f1)
+            heading_line=$(echo "$heading_entry" | cut -d: -f1)
             [[ -z "$heading_line" ]] && continue
 
             # Find the next heading (any level) after this one
@@ -351,12 +351,12 @@ extract_prd_tasks() {
 - [ ] ${task_text}"
                 fi
             done <<< "$section_content"
-        done <<< "$headings"
+        done <<< "$heading_lines"
     fi
 
     # Clean up and output
     if [[ -n "$tasks" ]]; then
-        echo "$tasks" | grep -v '^$' | head -30  # Limit to 30 tasks
+        echo "$tasks" | grep -v '^$' | awk '!seen[$0]++' | head -30  # Deduplicate, limit to 30
         return 0
     fi
 
