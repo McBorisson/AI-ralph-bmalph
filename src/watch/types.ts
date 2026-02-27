@@ -53,7 +53,7 @@ export interface DashboardState {
   execution: ExecutionProgress | null;
   session: SessionInfo | null;
   recentLogs: LogEntry[];
-  completionMismatch: boolean;
+  ralphCompleted: boolean;
   lastUpdated: Date;
 }
 

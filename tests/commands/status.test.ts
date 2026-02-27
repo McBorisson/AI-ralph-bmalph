@@ -54,13 +54,14 @@ describe("status command", () => {
     tasksTotal?: number;
   }) {
     await mkdir(join(testDir, ".ralph"), { recursive: true });
+    // Write snake_case keys matching real Ralph bash output
     await writeFile(
       join(testDir, ".ralph/status.json"),
       JSON.stringify({
-        loopCount: status.loopCount ?? 0,
+        loop_count: status.loopCount ?? 0,
         status: status.status ?? "not_started",
-        tasksCompleted: status.tasksCompleted ?? 0,
-        tasksTotal: status.tasksTotal ?? 0,
+        tasks_completed: status.tasksCompleted ?? 0,
+        tasks_total: status.tasksTotal ?? 0,
       })
     );
   }
@@ -413,6 +414,25 @@ describe("status command", () => {
       const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
       const parsed = JSON.parse(output);
       expect(parsed.completionMismatch).toBeUndefined();
+    });
+
+    it("detects completion mismatch from snake_case graceful_exit status", async () => {
+      await setupProject();
+      await setupState({ currentPhase: 4, status: "implementing" });
+      await setupRalphStatus({
+        loopCount: 10,
+        status: "graceful_exit",
+        tasksCompleted: 8,
+        tasksTotal: 8,
+      });
+
+      const { runStatus } = await import("../../src/commands/status.js");
+      await runStatus({ json: true, projectDir: testDir });
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+      const parsed = JSON.parse(output);
+      expect(parsed.completionMismatch).toBe(true);
+      expect(parsed.ralph.status).toBe("completed");
     });
 
     it("does not show completion message when Ralph is still running", async () => {

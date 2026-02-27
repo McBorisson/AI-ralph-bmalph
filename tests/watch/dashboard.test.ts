@@ -27,7 +27,7 @@ function makeEmptyState(): DashboardState {
     execution: null,
     session: null,
     recentLogs: [],
-    completionMismatch: false,
+    ralphCompleted: false,
     lastUpdated: new Date("2026-02-25T14:25:15Z"),
   };
 }

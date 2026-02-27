@@ -535,7 +535,7 @@ describe("state-reader", () => {
     });
   });
 
-  describe("completionMismatch", () => {
+  describe("ralphCompleted", () => {
     it("is true when Ralph status is completed", async () => {
       testDir = makeTmpDir();
       const ralphDir = join(testDir, ".ralph");
@@ -549,7 +549,7 @@ describe("state-reader", () => {
 
       const state = await readDashboardState(testDir);
 
-      expect(state.completionMismatch).toBe(true);
+      expect(state.ralphCompleted).toBe(true);
     });
 
     it("is true when Ralph status is graceful_exit", async () => {
@@ -565,7 +565,7 @@ describe("state-reader", () => {
 
       const state = await readDashboardState(testDir);
 
-      expect(state.completionMismatch).toBe(true);
+      expect(state.ralphCompleted).toBe(true);
     });
 
     it("is false when Ralph is still running", async () => {
@@ -581,7 +581,7 @@ describe("state-reader", () => {
 
       const state = await readDashboardState(testDir);
 
-      expect(state.completionMismatch).toBe(false);
+      expect(state.ralphCompleted).toBe(false);
     });
 
     it("is false when no Ralph status exists", async () => {
@@ -590,7 +590,7 @@ describe("state-reader", () => {
 
       const state = await readDashboardState(testDir);
 
-      expect(state.completionMismatch).toBe(false);
+      expect(state.ralphCompleted).toBe(false);
     });
   });
 });
