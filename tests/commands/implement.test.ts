@@ -250,7 +250,7 @@ describe("implement command", () => {
       const { runTransition } = await import("../../src/transition/orchestration.js");
       const { resolveProjectPlatform } = await import("../../src/platform/resolve.js");
       vi.mocked(resolveProjectPlatform).mockResolvedValue(
-        mockPlatform({ id: "cursor", displayName: "Cursor", tier: "instructions-only" })
+        mockPlatform({ id: "windsurf", displayName: "Windsurf", tier: "instructions-only" })
       );
       vi.mocked(runTransition).mockResolvedValue(mockTransitionResult());
 
@@ -259,7 +259,7 @@ describe("implement command", () => {
 
       const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(output).toContain("full-tier platform");
-      expect(output).toContain("Cursor");
+      expect(output).toContain("Windsurf");
     });
   });
 

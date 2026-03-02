@@ -27,7 +27,7 @@ vi.mock("../../src/platform/registry.js", () => ({
   getPlatform: vi.fn((id: string) => ({
     id,
     displayName: id === "claude-code" ? "Claude Code" : id === "codex" ? "OpenAI Codex" : id,
-    tier: id === "claude-code" || id === "codex" ? "full" : "instructions-only",
+    tier: ["claude-code", "codex", "copilot", "cursor"].includes(id) ? "full" : "instructions-only",
     instructionsFile: id === "claude-code" ? "CLAUDE.md" : "AGENTS.md",
     commandDelivery:
       id === "claude-code"
@@ -42,7 +42,7 @@ vi.mock("../../src/platform/registry.js", () => ({
   getAllPlatforms: vi.fn(() => [
     { id: "claude-code", displayName: "Claude Code", tier: "full" },
     { id: "codex", displayName: "OpenAI Codex", tier: "full" },
-    { id: "cursor", displayName: "Cursor", tier: "instructions-only" },
+    { id: "cursor", displayName: "Cursor", tier: "full", experimental: true },
     { id: "windsurf", displayName: "Windsurf", tier: "instructions-only" },
     { id: "copilot", displayName: "GitHub Copilot CLI", tier: "full", experimental: true },
     { id: "aider", displayName: "Aider", tier: "instructions-only" },

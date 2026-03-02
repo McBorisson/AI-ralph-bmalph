@@ -23,7 +23,7 @@ describe("bmalph run e2e", { timeout: 60000 }, () => {
 
   it("exits with error for instructions-only platform", async () => {
     project = await createTestProject();
-    await runInit(project.path, "test-project", "test", "cursor");
+    await runInit(project.path, "test-project", "test", "windsurf");
 
     const result = await runRun(project.path);
 

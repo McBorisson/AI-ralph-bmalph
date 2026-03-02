@@ -167,7 +167,7 @@ describe("status command", () => {
         join(testDir, "bmalph/config.json"),
         JSON.stringify({
           name: "test",
-          platform: "cursor",
+          platform: "windsurf",
           createdAt: new Date().toISOString(),
         })
       );

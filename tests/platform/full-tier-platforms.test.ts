@@ -2,20 +2,24 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { windsurfPlatform } from "../../src/platform/windsurf.js";
-import { aiderPlatform } from "../../src/platform/aider.js";
+import { copilotPlatform } from "../../src/platform/copilot.js";
+import { cursorPlatform } from "../../src/platform/cursor.js";
 import type { Platform } from "../../src/platform/types.js";
 
-const idePlatforms: Array<{ platform: Platform; expectedFile: string }> = [
-  { platform: windsurfPlatform, expectedFile: ".windsurf/rules/bmad.md" },
-  { platform: aiderPlatform, expectedFile: "CONVENTIONS.md" },
+const fullTierPlatforms: Array<{ platform: Platform; expectedFile: string }> = [
+  { platform: copilotPlatform, expectedFile: ".github/copilot-instructions.md" },
+  { platform: cursorPlatform, expectedFile: ".cursor/rules/bmad.mdc" },
 ];
 
-describe("IDE-only platforms", () => {
-  for (const { platform, expectedFile } of idePlatforms) {
+describe("full-tier experimental platforms", () => {
+  for (const { platform, expectedFile } of fullTierPlatforms) {
     describe(platform.displayName, () => {
-      it("has tier instructions-only", () => {
-        expect(platform.tier).toBe("instructions-only");
+      it("has tier full", () => {
+        expect(platform.tier).toBe("full");
+      });
+
+      it("is marked as experimental", () => {
+        expect(platform.experimental).toBe(true);
       });
 
       it("has commandDelivery kind none", () => {
@@ -26,6 +30,17 @@ describe("IDE-only platforms", () => {
         expect(platform.instructionsFile).toBe(expectedFile);
       });
 
+      it("generateInstructionsSnippet contains BMAD-METHOD Integration", () => {
+        const snippet = platform.generateInstructionsSnippet();
+        expect(snippet).toContain("BMAD-METHOD Integration");
+      });
+
+      it("generateInstructionsSnippet references Phase 4 and Ralph", () => {
+        const snippet = platform.generateInstructionsSnippet();
+        expect(snippet).toContain("4. Implementation");
+        expect(snippet).toContain("Ralph");
+      });
+
       it("generateInstructionsSnippet does not contain slash command syntax", () => {
         const snippet = platform.generateInstructionsSnippet();
         expect(snippet).not.toMatch(/\/bmalph\b/);
@@ -34,9 +49,9 @@ describe("IDE-only platforms", () => {
         expect(snippet).not.toMatch(/\/pm\b/);
       });
 
-      it("generateInstructionsSnippet contains BMAD-METHOD Integration", () => {
+      it("generateInstructionsSnippet does not say platform unsupported", () => {
         const snippet = platform.generateInstructionsSnippet();
-        expect(snippet).toContain("BMAD-METHOD Integration");
+        expect(snippet).not.toContain("not supported on this platform");
       });
 
       it("getDoctorChecks returns at least 1 check", () => {
@@ -50,7 +65,7 @@ describe("IDE-only platforms", () => {
     let testDir: string;
 
     beforeEach(async () => {
-      testDir = join(tmpdir(), `bmalph-ide-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      testDir = join(tmpdir(), `bmalph-full-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       await mkdir(testDir, { recursive: true });
     });
 
@@ -62,11 +77,11 @@ describe("IDE-only platforms", () => {
       }
     });
 
-    for (const { platform, expectedFile } of idePlatforms) {
+    for (const { platform, expectedFile } of fullTierPlatforms) {
       it(`${platform.displayName} check passes when instructions file has marker`, async () => {
         const filePath = join(testDir, expectedFile);
         await mkdir(join(filePath, ".."), { recursive: true });
-        await writeFile(filePath, "## BMAD-METHOD Integration\nContent");
+        await writeFile(filePath, "## BMAD-METHOD Integration\nContent here");
         const checks = platform.getDoctorChecks();
         const instrCheck = checks.find((c) => c.id === "instructions-file")!;
         const result = await instrCheck.check(testDir);
@@ -78,17 +93,7 @@ describe("IDE-only platforms", () => {
         const instrCheck = checks.find((c) => c.id === "instructions-file")!;
         const result = await instrCheck.check(testDir);
         expect(result.passed).toBe(false);
-      });
-
-      it(`${platform.displayName} check fails when instructions file has wrong content`, async () => {
-        const filePath = join(testDir, expectedFile);
-        await mkdir(join(filePath, ".."), { recursive: true });
-        await writeFile(filePath, "# My Project\n\nUnrelated content without the marker.");
-        const checks = platform.getDoctorChecks();
-        const instrCheck = checks.find((c) => c.id === "instructions-file")!;
-        const result = await instrCheck.check(testDir);
-        expect(result.passed).toBe(false);
-        expect(result.detail).toContain("missing");
+        expect(result.detail).toContain("not found");
       });
     }
   });

@@ -23,7 +23,7 @@ const PLATFORM_CONFIGS: PlatformAssertionConfig[] = [
     id: "cursor",
     instructionsFile: ".cursor/rules/bmad.mdc",
     commandDelivery: "none",
-    tier: "instructions-only",
+    tier: "full",
   },
   {
     id: "windsurf",
@@ -200,46 +200,46 @@ describe("multi-platform e2e", { timeout: 60000 }, () => {
     );
   });
 
-  describe("copilot-specific", () => {
-    it("copilot instructions reference Phase 4 and Ralph", async () => {
-      project = await createTestProject();
+  describe.each(PLATFORM_CONFIGS.filter((p) => p.tier === "full" && p.commandDelivery === "none"))(
+    "$id-specific",
+    (platform) => {
+      it("instructions reference Phase 4 and Ralph", async () => {
+        project = await createTestProject();
 
-      await runInit(project.path, "test-project", "E2E test", "copilot");
+        await runInit(project.path, "test-project", "E2E test", platform.id);
 
-      const content = await readFile(
-        join(project.path, ".github/copilot-instructions.md"),
-        "utf-8"
-      );
+        const content = await readFile(join(project.path, platform.instructionsFile), "utf-8");
 
-      expect(content).toContain("4. Implementation");
-      expect(content).toContain("Ralph");
-      expect(content).not.toContain("not supported on this platform");
-    });
+        expect(content).toContain("4. Implementation");
+        expect(content).toContain("Ralph");
+        expect(content).not.toContain("not supported on this platform");
+      });
 
-    it("copilot has no command delivery artifacts", async () => {
-      project = await createTestProject();
+      it("has no command delivery artifacts", async () => {
+        project = await createTestProject();
 
-      await runInit(project.path, "test-project", "E2E test", "copilot");
+        await runInit(project.path, "test-project", "E2E test", platform.id);
 
-      await expectFileNotExists(join(project.path, ".claude/commands"));
-      await expectFileNotContains(
-        join(project.path, ".github/copilot-instructions.md"),
-        "## BMAD Commands"
-      );
-    });
+        await expectFileNotExists(join(project.path, ".claude/commands"));
+        await expectFileNotContains(
+          join(project.path, platform.instructionsFile),
+          "## BMAD Commands"
+        );
+      });
 
-    it(".ralphrc has correct platform driver", async () => {
-      project = await createTestProject();
+      it(".ralphrc has correct platform driver", async () => {
+        project = await createTestProject();
 
-      await runInit(project.path, "test-project", "E2E test", "copilot");
+        await runInit(project.path, "test-project", "E2E test", platform.id);
 
-      await expectFileExists(join(project.path, ".ralph/.ralphrc"));
-      await expectFileContains(
-        join(project.path, ".ralph/.ralphrc"),
-        'PLATFORM_DRIVER="${PLATFORM_DRIVER:-copilot}"'
-      );
-    });
-  });
+        await expectFileExists(join(project.path, ".ralph/.ralphrc"));
+        await expectFileContains(
+          join(project.path, ".ralph/.ralphrc"),
+          `PLATFORM_DRIVER="\${PLATFORM_DRIVER:-${platform.id}}"`
+        );
+      });
+    }
+  );
 
   describe("_bmad/config.yaml platform field", () => {
     it.each(PLATFORM_CONFIGS)("$id: config.yaml has correct platform", async (platform) => {

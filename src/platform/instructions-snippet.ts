@@ -1,6 +1,6 @@
 /**
- * Shared instructions snippet for full-tier platforms (codex, copilot).
- * @param verb - Opening verb for the first line ("Run" for codex, "Ask" for copilot).
+ * Shared instructions snippet for full-tier platforms (codex, copilot, cursor).
+ * @param verb - Opening verb for the first line ("Run" for codex, "Ask" for copilot/cursor).
  */
 export function generateFullTierSnippet(verb: string): string {
   return `
@@ -38,7 +38,7 @@ ${verb} the BMAD master agent to navigate phases. Ask for help to discover all a
 
 /**
  * Shared instructions snippet for instructions-only platforms.
- * Used by: cursor, windsurf, aider.
+ * Used by: windsurf, aider.
  */
 export function generateInstructionsOnlySnippet(): string {
   return `

@@ -10,7 +10,7 @@
 # PLATFORM DRIVER
 # =============================================================================
 
-# Platform driver for Ralph loop (claude-code, codex, or copilot)
+# Platform driver for Ralph loop (claude-code, codex, copilot, or cursor)
 PLATFORM_DRIVER="${PLATFORM_DRIVER:-claude-code}"
 
 # =============================================================================

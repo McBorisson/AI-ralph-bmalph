@@ -10,7 +10,7 @@ vi.mock("../../src/utils/config.js", () => ({
 vi.mock("../../src/platform/registry.js", () => ({
   getPlatform: vi.fn(),
   isPlatformId: vi.fn(),
-  getFullTierPlatformNames: vi.fn(() => "Claude Code, OpenAI Codex, GitHub Copilot CLI"),
+  getFullTierPlatformNames: vi.fn(() => "Claude Code, OpenAI Codex, GitHub Copilot CLI, Cursor"),
 }));
 
 vi.mock("../../src/run/ralph-process.js", () => ({
@@ -87,17 +87,17 @@ describe("runCommand", () => {
         name: "test",
         description: "",
         createdAt: "2026-02-28",
-        platform: "cursor",
+        platform: "windsurf",
       });
       vi.mocked(isPlatformId).mockReturnValue(true);
       vi.mocked(getPlatform).mockReturnValue(
-        mockPlatform({ id: "cursor", displayName: "Cursor", tier: "instructions-only" })
+        mockPlatform({ id: "windsurf", displayName: "Windsurf", tier: "instructions-only" })
       );
 
       const { runCommand } = await import("../../src/commands/run.js");
       await runCommand({
         projectDir: "/test/project",
-        driver: "cursor",
+        driver: "windsurf",
         interval: "2000",
         dashboard: true,
       });
@@ -107,7 +107,10 @@ describe("runCommand", () => {
       expect(errorOutput).toContain("full-tier");
     });
 
-    it("accepts copilot as a full-tier platform", async () => {
+    it.each([
+      { id: "copilot", displayName: "GitHub Copilot CLI" },
+      { id: "cursor", displayName: "Cursor" },
+    ])("accepts $id as a full-tier experimental platform", async ({ id, displayName }) => {
       const { readConfig } = await import("../../src/utils/config.js");
       const { isPlatformId, getPlatform } = await import("../../src/platform/registry.js");
       const { validateBashAvailable, validateRalphLoop, spawnRalphLoop } =
@@ -118,13 +121,13 @@ describe("runCommand", () => {
         name: "test",
         description: "",
         createdAt: "2026-02-28",
-        platform: "copilot",
+        platform: id,
       });
       vi.mocked(isPlatformId).mockReturnValue(true);
       vi.mocked(getPlatform).mockReturnValue(
         mockPlatform({
-          id: "copilot",
-          displayName: "GitHub Copilot CLI",
+          id,
+          displayName,
           tier: "full",
           experimental: true,
         })
@@ -144,13 +147,13 @@ describe("runCommand", () => {
       const { runCommand } = await import("../../src/commands/run.js");
       await runCommand({
         projectDir: "/test/project",
-        driver: "copilot",
+        driver: id,
         interval: "2000",
         dashboard: true,
       });
 
       expect(process.exitCode).toBeUndefined();
-      expect(spawnRalphLoop).toHaveBeenCalledWith("/test/project", "copilot", {
+      expect(spawnRalphLoop).toHaveBeenCalledWith("/test/project", id, {
         inheritStdio: false,
       });
     });
