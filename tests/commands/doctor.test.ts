@@ -578,7 +578,7 @@ describe("doctor command", () => {
       expect(process.exitCode).toBeUndefined();
     });
 
-    it("does not set exitCode in JSON mode even when checks fail", async () => {
+    it("sets exitCode to 1 in JSON mode when checks fail", async () => {
       // Empty project - most checks will fail
       const { checkUpstream } = await import("../../src/utils/github.js");
       vi.mocked(checkUpstream).mockResolvedValue({
@@ -586,10 +586,35 @@ describe("doctor command", () => {
         errors: [{ type: "network", message: "offline", repo: "bmad" }],
       });
 
-      const { runDoctor } = await import("../../src/commands/doctor.js");
-      await runDoctor({ json: true, projectDir: testDir });
+      const { doctorCommand } = await import("../../src/commands/doctor.js");
+      await doctorCommand({ json: true, projectDir: testDir });
 
-      // JSON mode should not set exit code - let the caller decide based on output
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("does not set exitCode to 1 in JSON mode when all checks pass", async () => {
+      await setupFullProject();
+      const { getPackageVersion } = await import("../../src/installer.js");
+      const version = await getPackageVersion();
+      await writeFile(
+        join(testDir, ".ralph/ralph_loop.sh"),
+        `#!/bin/bash\n# bmalph-version: ${version}\necho hello\n`
+      );
+
+      const { checkUpstream } = await import("../../src/utils/github.js");
+      vi.mocked(checkUpstream).mockResolvedValue({
+        bmad: {
+          bundledSha: TEST_BMAD_COMMIT,
+          latestSha: TEST_BMAD_COMMIT,
+          isUpToDate: true,
+          compareUrl: "https://github.com/bmad-code-org/BMAD-METHOD/compare/...",
+        },
+        errors: [],
+      });
+
+      const { doctorCommand } = await import("../../src/commands/doctor.js");
+      await doctorCommand({ json: true, projectDir: testDir });
+
       expect(process.exitCode).toBeUndefined();
     });
   });

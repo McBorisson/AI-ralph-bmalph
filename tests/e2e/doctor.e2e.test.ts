@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { runInit, runDoctor } from "./helpers/cli-runner.js";
+import { runCli, runInit, runDoctor } from "./helpers/cli-runner.js";
 import { createTestProject, type TestProject } from "./helpers/project-scaffold.js";
 import { expectDoctorCheckPassed, expectDoctorCheckFailed } from "./helpers/assertions.js";
 
@@ -101,5 +101,16 @@ describe("bmalph doctor e2e", { timeout: 60000 }, () => {
     expectDoctorCheckFailed(result.stdout, "bmalph/config.json exists and valid");
     expectDoctorCheckFailed(result.stdout, "_bmad/ directory present");
     expectDoctorCheckFailed(result.stdout, "ralph_loop.sh present and has content");
+  });
+
+  it("doctor --json exits with code 1 when checks fail on uninitialized project", async () => {
+    project = await createTestProject();
+
+    const result = await runCli(["doctor", "--json"], { cwd: project.path });
+
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout);
+    expect(typeof parsed).toBe("object");
+    expect(parsed.summary.failed).toBeGreaterThan(0);
   });
 });

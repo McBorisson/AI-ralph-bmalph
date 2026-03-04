@@ -50,7 +50,7 @@ interface DoctorResult {
 export async function doctorCommand(options: DoctorOptions): Promise<void> {
   await withErrorHandling(async () => {
     const { failed } = await runDoctor(options);
-    if (!options.json && failed > 0) {
+    if (failed > 0) {
       process.exitCode = 1;
     }
   });
