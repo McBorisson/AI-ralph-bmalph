@@ -2,8 +2,8 @@
 
 # Ralph Status Monitor - Live terminal dashboard for the Ralph loop
 #
-# DEPRECATED: Use `bmalph watch` instead, which provides a more capable
-# TypeScript-based live dashboard with full test coverage.
+# DEPRECATED: Use `bmalph run` instead, which starts Ralph and shows the
+# supported live dashboard.
 # This script is kept for backward compatibility in tmux sessions.
 set -e
 
@@ -77,7 +77,7 @@ display_status() {
         echo
     fi
     
-    # Claude Code Progress section
+    # Driver Progress section
     if [[ -f ".ralph/progress.json" ]]; then
         local progress_data=$(cat ".ralph/progress.json" 2>/dev/null)
         local progress_status=$(echo "$progress_data" | jq -r '.status // "idle"' 2>/dev/null || echo "idle")
@@ -87,7 +87,7 @@ display_status() {
             local elapsed=$(echo "$progress_data" | jq -r '.elapsed_seconds // "0"' 2>/dev/null || echo "0")
             local last_output=$(echo "$progress_data" | jq -r '.last_output // ""' 2>/dev/null || echo "")
             
-            echo -e "${YELLOW}┌─ Claude Code Progress ──────────────────────────────────────────────────┐${NC}"
+            echo -e "${YELLOW}┌─ Driver Progress ───────────────────────────────────────────────────────┐${NC}"
             echo -e "${YELLOW}│${NC} Status:         ${indicator} Working (${elapsed}s elapsed)"
             if [[ -n "$last_output" && "$last_output" != "" ]]; then
                 # Truncate long output for display

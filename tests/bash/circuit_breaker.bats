@@ -489,6 +489,20 @@ teardown() {
     assert_success
 }
 
+@test "should_halt_execution shows bmalph-compatible recovery guidance" {
+    init_circuit_breaker
+    jq '.state = "OPEN" | .reason = "no_progress_threshold"' "$CB_STATE_FILE" > "$CB_STATE_FILE.tmp"
+    mv "$CB_STATE_FILE.tmp" "$CB_STATE_FILE"
+
+    run should_halt_execution
+
+    assert_success
+    assert_output --partial ".ralph/@fix_plan.md"
+    assert_output --partial "bash .ralph/ralph_loop.sh --reset-circuit"
+    refute_output --partial ".ralph/fix_plan.md"
+    refute_output --partial "ralph --reset-circuit"
+}
+
 @test "should_halt_execution returns 1 (continue) when CLOSED" {
     init_circuit_breaker
     run should_halt_execution

@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveBashCommand } from "../run/ralph-process.js";
 import { readJsonFile } from "../utils/json.js";
 import { isEnoent, formatError } from "../utils/errors.js";
 import { CONFIG_FILE } from "../utils/constants.js";
@@ -27,17 +28,23 @@ export async function checkNodeVersion(_projectDir: string): Promise<CheckResult
 }
 
 export async function checkBash(_projectDir: string): Promise<CheckResult> {
-  const available = await checkCommandAvailable("bash");
-  return {
-    label: "bash available",
-    passed: available,
-    detail: available ? undefined : "bash not found in PATH",
-    hint: available
-      ? undefined
-      : process.platform === "win32"
-        ? "Install Git Bash or WSL: https://git-scm.com/downloads"
-        : "Install bash via your package manager (apt, brew, etc.)",
-  };
+  try {
+    await resolveBashCommand();
+    return {
+      label: "bash available",
+      passed: true,
+    };
+  } catch (err) {
+    return {
+      label: "bash available",
+      passed: false,
+      detail: formatError(err),
+      hint:
+        process.platform === "win32"
+          ? "Install Git Bash and ensure its bash.exe is available: https://git-scm.com/downloads"
+          : "Install bash via your package manager (apt, brew, etc.)",
+    };
+  }
 }
 
 export async function checkJq(_projectDir: string): Promise<CheckResult> {

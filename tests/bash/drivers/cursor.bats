@@ -16,9 +16,77 @@ teardown() {
 # Driver identification
 # ===========================================================================
 
-@test "driver_cli_binary returns agent" {
+@test "driver_cli_binary falls back to cursor-agent" {
     run driver_cli_binary
-    assert_output "agent"
+    assert_output "cursor-agent"
+}
+
+@test "driver_cli_binary prefers cursor-agent over agent" {
+    _mock_cli agent 0
+    _mock_cli cursor-agent 0
+
+    run driver_cli_binary
+
+    assert_success
+    [[ "$output" =~ cursor-agent$ ]]
+}
+
+@test "driver_cli_binary falls back to LOCALAPPDATA agent.cmd on Windows" {
+    export OSTYPE="msys"
+    export LOCALAPPDATA="$RALPH_DIR/localappdata"
+    mkdir -p "$LOCALAPPDATA/cursor-agent"
+    printf '@echo off\r\n' > "$LOCALAPPDATA/cursor-agent/agent.cmd"
+
+    run driver_cli_binary
+
+    assert_success
+    [[ "$output" =~ agent\.cmd$ ]]
+}
+
+@test "driver_cli_binary detects agent.cmd on PATH on Windows" {
+    export OSTYPE="msys"
+    mkdir -p "$RALPH_DIR/windows-bin"
+    printf '@echo off\r\n' > "$RALPH_DIR/windows-bin/agent.cmd"
+    export PATH="$RALPH_DIR/windows-bin:$PATH"
+
+    run driver_cli_binary
+
+    assert_success
+    assert_equal "$output" "$RALPH_DIR/windows-bin/agent.cmd"
+}
+
+@test "driver_cli_binary parses semicolon-delimited Windows PATH entries" {
+    export OSTYPE="msys"
+    local original_path="$PATH"
+    mkdir -p "$RALPH_DIR/win-bin-1" "$RALPH_DIR/win-bin-2"
+    printf '@echo off\r\n' > "$RALPH_DIR/win-bin-2/agent.cmd"
+
+    cygpath() {
+        if [[ "$1" != "-u" ]]; then
+            return 1
+        fi
+
+        case "$2" in
+            'C:\mock\bin1')
+                echo "$RALPH_DIR/win-bin-1"
+                ;;
+            'D:\mock\bin2')
+                echo "$RALPH_DIR/win-bin-2"
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    }
+    export -f cygpath
+
+    export PATH='C:\mock\bin1;D:\mock\bin2'
+
+    run driver_cli_binary
+    export PATH="$original_path"
+
+    assert_success
+    assert_equal "$output" "$RALPH_DIR/win-bin-2/agent.cmd"
 }
 
 @test "driver_name returns cursor" {
@@ -86,9 +154,23 @@ teardown() {
 
 @test "driver_build_command prepends context to prompt" {
     local prompt_file="$RALPH_DIR/prompt.md"
+    local original_os="${OS-}"
+    local original_ostype="${OSTYPE-}"
     echo "Implement auth module" > "$prompt_file"
 
+    unset OS
+    export OSTYPE="linux-gnu"
     driver_build_command "$prompt_file" "Loop 2 context: progress detected" ""
+    if [[ -n "$original_os" ]]; then
+        export OS="$original_os"
+    else
+        unset OS
+    fi
+    if [[ -n "$original_ostype" ]]; then
+        export OSTYPE="$original_ostype"
+    else
+        unset OSTYPE
+    fi
 
     # Last arg is the combined prompt
     local last_arg="${CLAUDE_CMD_ARGS[${#CLAUDE_CMD_ARGS[@]}-1]}"
@@ -126,6 +208,43 @@ teardown() {
 
     local args_str="${CLAUDE_CMD_ARGS[*]}"
     [[ ! "$args_str" =~ "--append-system-prompt" ]]
+}
+
+@test "driver_build_command uses bootstrap prompt on Windows" {
+    export OSTYPE="msys"
+    export LOCALAPPDATA="$RALPH_DIR/localappdata"
+    mkdir -p "$LOCALAPPDATA/cursor-agent"
+    printf '@echo off\r\n' > "$LOCALAPPDATA/cursor-agent/agent.cmd"
+
+    local prompt_file="$RALPH_DIR/prompt.md"
+    echo "Very large prompt content that should not be passed inline on Windows" > "$prompt_file"
+
+    driver_build_command "$prompt_file" "Loop 2 context: progress detected" ""
+
+    local last_arg="${CLAUDE_CMD_ARGS[${#CLAUDE_CMD_ARGS[@]}-1]}"
+    [[ "$last_arg" =~ ".ralph/PROMPT.md" ]]
+    [[ "$last_arg" =~ ".ralph/PROJECT_CONTEXT.md" ]]
+    [[ "$last_arg" =~ ".ralph/SPECS_INDEX.md" ]]
+    [[ "$last_arg" =~ ".ralph/@fix_plan.md" ]]
+    [[ "$last_arg" =~ ".ralph/@AGENT.md" ]]
+    [[ "$last_arg" =~ ".ralph/specs/" ]]
+    [[ "$last_arg" =~ "Loop 2 context" ]]
+    [[ ! "$last_arg" =~ "Very large prompt content" ]]
+}
+
+@test "driver_build_command wraps .cmd binaries for timeout compatibility" {
+    export OSTYPE="msys"
+    export LOCALAPPDATA="$RALPH_DIR/localappdata"
+    mkdir -p "$LOCALAPPDATA/cursor-agent"
+    printf '@echo off\r\n' > "$LOCALAPPDATA/cursor-agent/agent.cmd"
+
+    local prompt_file="$RALPH_DIR/prompt.md"
+    echo "Test prompt" > "$prompt_file"
+
+    driver_build_command "$prompt_file" "" ""
+
+    [[ "${CLAUDE_CMD_ARGS[0]}" =~ cursor-agent-wrapper\.sh$ ]]
+    assert_equal "${CLAUDE_CMD_ARGS[1]}" "$LOCALAPPDATA/cursor-agent/agent.cmd"
 }
 
 @test "driver_build_command fails with missing prompt file" {

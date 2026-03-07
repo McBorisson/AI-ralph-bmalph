@@ -82,7 +82,7 @@ teardown() {
 @test "check_existing_ralph sets partial when some files exist" {
     mkdir -p ".ralph"
     echo "# Prompt" > ".ralph/PROMPT.md"
-    # Missing AGENT.md and fix_plan.md
+    # Missing @AGENT.md and @fix_plan.md
 
     check_existing_ralph || true
     assert_equal "$RALPH_STATE" "partial"
@@ -101,17 +101,17 @@ teardown() {
     echo "# Prompt" > ".ralph/PROMPT.md"
 
     check_existing_ralph || true
-    # AGENT.md and fix_plan.md should be in the missing list
+    # @AGENT.md and @fix_plan.md should be in the missing list
     local missing_str="${RALPH_MISSING_FILES[*]}"
-    [[ "$missing_str" == *"AGENT.md"* ]]
-    [[ "$missing_str" == *"fix_plan.md"* ]]
+    [[ "$missing_str" == *"@AGENT.md"* ]]
+    [[ "$missing_str" == *"@fix_plan.md"* ]]
 }
 
 @test "check_existing_ralph sets complete when all files exist" {
     mkdir -p ".ralph"
     echo "# Prompt" > ".ralph/PROMPT.md"
-    echo "# Agent" > ".ralph/AGENT.md"
-    echo "# Fix Plan" > ".ralph/fix_plan.md"
+    echo "# Agent" > ".ralph/@AGENT.md"
+    echo "# Fix Plan" > ".ralph/@fix_plan.md"
 
     check_existing_ralph || true
     assert_equal "$RALPH_STATE" "complete"
@@ -120,8 +120,8 @@ teardown() {
 @test "check_existing_ralph returns 2 for complete state" {
     mkdir -p ".ralph"
     echo "# Prompt" > ".ralph/PROMPT.md"
-    echo "# Agent" > ".ralph/AGENT.md"
-    echo "# Fix Plan" > ".ralph/fix_plan.md"
+    echo "# Agent" > ".ralph/@AGENT.md"
+    echo "# Fix Plan" > ".ralph/@fix_plan.md"
 
     run check_existing_ralph
     assert_equal "$status" "2"
@@ -134,8 +134,8 @@ teardown() {
 @test "is_ralph_enabled returns true for complete installation" {
     mkdir -p ".ralph"
     echo "# Prompt" > ".ralph/PROMPT.md"
-    echo "# Agent" > ".ralph/AGENT.md"
-    echo "# Fix Plan" > ".ralph/fix_plan.md"
+    echo "# Agent" > ".ralph/@AGENT.md"
+    echo "# Fix Plan" > ".ralph/@fix_plan.md"
 
     run is_ralph_enabled
     assert_success
@@ -523,7 +523,7 @@ EOF
     run generate_prompt_md "my-app" "javascript"
     assert_success
     assert_output --partial "Review the codebase"
-    assert_output --partial "Follow tasks in fix_plan.md"
+    assert_output --partial "Follow tasks in @fix_plan.md"
 }
 
 @test "generate_prompt_md includes custom objectives when provided" {
@@ -591,16 +591,16 @@ EOF
     [[ -d ".ralph/specs" ]]
     [[ -d ".ralph/logs" ]]
     [[ -f ".ralph/PROMPT.md" ]]
-    [[ -f ".ralph/AGENT.md" ]]
-    [[ -f ".ralph/fix_plan.md" ]]
+    [[ -f ".ralph/@AGENT.md" ]]
+    [[ -f ".ralph/@fix_plan.md" ]]
     [[ -f ".ralphrc" ]]
 }
 
 @test "enable_ralph_in_directory returns ENABLE_ALREADY_ENABLED when complete" {
     mkdir -p ".ralph"
     echo "# Prompt" > ".ralph/PROMPT.md"
-    echo "# Agent" > ".ralph/AGENT.md"
-    echo "# Fix Plan" > ".ralph/fix_plan.md"
+    echo "# Agent" > ".ralph/@AGENT.md"
+    echo "# Fix Plan" > ".ralph/@fix_plan.md"
 
     run enable_ralph_in_directory
     assert_equal "$status" "2"

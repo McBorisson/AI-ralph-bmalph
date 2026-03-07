@@ -2,10 +2,12 @@
 
 This reference guide provides essential information for troubleshooting and understanding Ralph's autonomous development loop.
 
+In bmalph-managed projects, start Ralph with `bmalph run`. When you need direct loop flags such as `--reset-circuit` or `--live`, invoke `bash .ralph/ralph_loop.sh ...` from the project root.
+
 ## Table of Contents
 
 1. [Configuration Files](#configuration-files)
-2. [Project Configuration (.ralphrc)](#project-configuration-ralphrc)
+2. [Project Configuration (.ralph/.ralphrc)](#project-configuration-ralphralphrc)
 3. [Session Management](#session-management)
 4. [Circuit Breaker](#circuit-breaker)
 5. [Exit Detection](#exit-detection)
@@ -16,12 +18,12 @@ This reference guide provides essential information for troubleshooting and unde
 
 ## Configuration Files
 
-Ralph uses several files within the `.ralph/` directory:
+Ralph uses several files within the `.ralph/` directory, plus an optional legacy fallback config at the project root:
 
 | File | Purpose |
 |------|---------|
 | `.ralph/PROMPT.md` | Main prompt that drives each loop iteration |
-| `.ralph/fix_plan.md` | Prioritized task list that Ralph follows |
+| `.ralph/@fix_plan.md` | Prioritized task list that Ralph follows |
 | `.ralph/@AGENT.md` | Build and run instructions maintained by Ralph |
 | `.ralph/status.json` | Real-time status tracking (JSON format) |
 | `.ralph/logs/` | Execution logs for each loop iteration |
@@ -29,23 +31,25 @@ Ralph uses several files within the `.ralph/` directory:
 | `.ralph/.circuit_breaker_state` | Circuit breaker state |
 | `.ralph/live.log` | Live streaming output file for monitoring |
 | `.ralph/.loop_start_sha` | Git HEAD SHA captured at loop start for progress detection |
-| `.ralphrc` (project root) | Project-specific configuration (tools, thresholds, session settings) |
+| `.ralph/.ralphrc` | Project-specific configuration installed by bmalph |
+| `.ralphrc` (project root, legacy fallback) | Optional legacy configuration for older standalone Ralph layouts |
 
 ### Rate Limiting
 
-- Default: 100 API calls per hour (configurable via `--calls` flag or `.ralphrc`)
+- Default: 100 API calls per hour (configurable via `--calls` flag or `.ralph/.ralphrc`)
 - Automatic hourly reset with countdown display
 - Call tracking persists across script restarts
 
 ---
 
-## Project Configuration (.ralphrc)
+## Project Configuration (.ralph/.ralphrc)
 
-Ralph supports a `.ralphrc` configuration file at the project root for per-project settings.
+In bmalph-managed projects, Ralph reads `.ralph/.ralphrc` for per-project settings.
+For backward compatibility with older standalone Ralph layouts, it also falls back to a project-root `.ralphrc` when the bundled config file is missing.
 
 ### Precedence
 
-Environment variables > `.ralphrc` > script defaults
+Environment variables > Ralph config file > script defaults
 
 ### Available Settings
 
@@ -54,7 +58,7 @@ Environment variables > `.ralphrc` > script defaults
 | `PROJECT_NAME` | `my-project` | Project name for prompts and logging |
 | `PROJECT_TYPE` | `unknown` | Project type (javascript, typescript, python, rust, go) |
 | `MAX_CALLS_PER_HOUR` | `100` | Rate limit for API calls |
-| `CLAUDE_TIMEOUT_MINUTES` | `15` | Timeout per Claude Code invocation |
+| `CLAUDE_TIMEOUT_MINUTES` | `15` | Timeout per loop driver invocation |
 | `CLAUDE_OUTPUT_FORMAT` | `json` | Output format (json or text) |
 | `ALLOWED_TOOLS` | `Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)` | Comma-separated allowed tools |
 | `SESSION_CONTINUITY` | `true` | Maintain context across loops |
@@ -69,7 +73,7 @@ Environment variables > `.ralphrc` > script defaults
 
 ### Generation
 
-bmalph copies `ralphrc.template` to `.ralph/.ralphrc` during `bmalph init`. Existing `.ralphrc` files are preserved during upgrades.
+bmalph copies `ralphrc.template` to `.ralph/.ralphrc` during `bmalph init`. Existing `.ralph/.ralphrc` files are preserved during upgrades.
 
 ---
 
@@ -79,7 +83,7 @@ Ralph maintains session continuity across loop iterations using `--resume` with 
 
 ### Session Continuity
 
-Ralph uses `--resume <session_id>` instead of `--continue` to resume sessions. This ensures Ralph only resumes its own sessions and avoids hijacking active Claude Code sessions the user may have open.
+Ralph uses `--resume <session_id>` instead of `--continue` to resume sessions. This ensures Ralph only resumes its own saved sessions and avoids hijacking unrelated active sessions.
 
 ### Session Files
 
@@ -87,7 +91,7 @@ Ralph uses `--resume <session_id>` instead of `--continue` to resume sessions. T
 |------|---------|
 | `.ralph/.ralph_session` | Current session ID and timestamps |
 | `.ralph/.ralph_session_history` | History of last 50 session transitions |
-| `.ralph/.claude_session_id` | Claude Code CLI session persistence |
+| `.ralph/.claude_session_id` | Persisted driver session ID (shared filename for historical reasons) |
 
 ### Session Lifecycle
 
@@ -95,12 +99,12 @@ Sessions are automatically reset when:
 - Circuit breaker opens (stagnation detected)
 - Manual interrupt (Ctrl+C / SIGINT)
 - Project completion (graceful exit)
-- Manual circuit breaker reset (`ralph --reset-circuit`)
-- Manual session reset (`ralph --reset-session`)
+- Manual circuit breaker reset (`bash .ralph/ralph_loop.sh --reset-circuit`)
+- Manual session reset (`bash .ralph/ralph_loop.sh --reset-session`)
 
 ### Session Expiration
 
-Sessions expire after 24 hours (configurable via `SESSION_EXPIRY_HOURS` in `.ralphrc`). When expired:
+Sessions expire after 24 hours (configurable via `SESSION_EXPIRY_HOURS` in `.ralph/.ralphrc`). When expired:
 - A new session is created automatically
 - Previous context is not preserved
 - Session history records the transition
@@ -144,16 +148,16 @@ The circuit breaker prevents runaway loops by detecting stagnation.
 
 ### Permission Denial Detection
 
-When Claude Code is denied permission to execute commands, Ralph:
+When the active driver is denied permission to execute commands, Ralph:
 1. Detects permission denials from the JSON output
 2. Halts the loop with reason `permission_denied`
-3. Displays guidance to update `ALLOWED_TOOLS` in `.ralphrc`
+3. Displays guidance to update `ALLOWED_TOOLS` in `.ralph/.ralphrc`
 
 ### Auto-Recovery Cooldown
 
 After `CB_COOLDOWN_MINUTES` (default: 30) in OPEN state, the circuit auto-transitions to HALF_OPEN. From HALF_OPEN, if progress is detected, circuit goes to CLOSED; otherwise back to OPEN.
 
-Set `CB_AUTO_RESET=true` in `.ralphrc` to bypass cooldown entirely and reset to CLOSED on startup.
+Set `CB_AUTO_RESET=true` in `.ralph/.ralphrc` to bypass cooldown entirely and reset to CLOSED on startup.
 
 ### Circuit Breaker State Structure
 
@@ -175,7 +179,7 @@ Set `CB_AUTO_RESET=true` in `.ralphrc` to bypass cooldown entirely and reset to 
 
 To reset the circuit breaker:
 ```bash
-ralph --reset-circuit
+bash .ralph/ralph_loop.sh --reset-circuit
 ```
 
 ---
@@ -200,17 +204,17 @@ The `completion_indicators` exit condition requires dual verification:
 | completion_indicators | EXIT_SIGNAL | Result |
 |-----------------------|-------------|--------|
 | >= 2 | `true` | **Exit** ("project_complete") |
-| >= 2 | `false` | **Continue** (Claude still working) |
+| >= 2 | `false` | **Continue** (agent still working) |
 | >= 2 | missing | **Continue** (defaults to false) |
 | < 2 | `true` | **Continue** (threshold not met) |
 
-**Rationale:** Natural language patterns like "done" or "complete" can trigger false positives during productive work. By requiring Claude's explicit EXIT_SIGNAL confirmation, Ralph avoids exiting mid-iteration.
+**Rationale:** Natural language patterns like "done" or "complete" can trigger false positives during productive work. By requiring an explicit `EXIT_SIGNAL` confirmation, Ralph avoids exiting mid-iteration.
 
-When Claude outputs `STATUS: COMPLETE` with `EXIT_SIGNAL: false`, the explicit `false` takes precedence. This allows marking a phase complete while indicating more phases remain.
+When the agent outputs `STATUS: COMPLETE` with `EXIT_SIGNAL: false`, the explicit `false` takes precedence. This allows marking a phase complete while indicating more phases remain.
 
 ### RALPH_STATUS Block
 
-Claude should include this status block at the end of each response:
+The coding agent should include this status block at the end of each response:
 
 ```
 ---RALPH_STATUS---
@@ -227,7 +231,7 @@ RECOMMENDATION: <one line summary of what to do next>
 ### When to Set EXIT_SIGNAL: true
 
 Set EXIT_SIGNAL to **true** when ALL conditions are met:
-1. All items in fix_plan.md are marked [x]
+1. All items in `@fix_plan.md` are marked `[x]`
 2. All tests are passing (or no tests exist for valid reasons)
 3. No errors or warnings in the last execution
 4. All requirements from specs/ are implemented
@@ -246,8 +250,8 @@ Ralph supports real-time streaming output with the `--live` flag.
 ### Usage
 
 ```bash
-ralph --live           # Live streaming output
-ralph --monitor --live # Live streaming with tmux monitoring
+bash .ralph/ralph_loop.sh --live           # Live streaming output
+bash .ralph/ralph_loop.sh --monitor --live # Live streaming with tmux monitoring
 ```
 
 ### How It Works
@@ -260,8 +264,8 @@ ralph --monitor --live # Live streaming with tmux monitoring
 
 When using `--monitor` with `--live`, tmux creates a 3-pane layout:
 - **Left pane:** Ralph loop with live streaming
-- **Right-top pane:** `tail -f .ralph/live.log` (Claude Code live output)
-- **Right-bottom pane:** `ralph-monitor` (status dashboard)
+- **Right-top pane:** `tail -f .ralph/live.log` (live driver output)
+- **Right-bottom pane:** status dashboard (`bmalph watch` when available)
 
 ---
 
@@ -276,11 +280,11 @@ When using `--monitor` with `--live`, tmux creates a 3-pane layout:
 **Causes:**
 - EXIT_SIGNAL set to true prematurely
 - completion_indicators triggered by natural language
-- All fix_plan.md items marked complete
+- All `@fix_plan.md` items marked complete
 
 **Solutions:**
 1. Ensure EXIT_SIGNAL is only true when genuinely complete
-2. Add remaining tasks to fix_plan.md
+2. Add remaining tasks to `@fix_plan.md`
 3. Check `.ralph/.response_analysis` for exit reasons
 
 #### Ralph doesn't exit when complete
@@ -289,13 +293,13 @@ When using `--monitor` with `--live`, tmux creates a 3-pane layout:
 
 **Causes:**
 - EXIT_SIGNAL not being set to true
-- fix_plan.md has unmarked items
+- `@fix_plan.md` has unmarked items
 - completion_indicators threshold not met
 
 **Solutions:**
 1. Ensure RALPH_STATUS block is included in responses
 2. Set EXIT_SIGNAL: true when all work is done
-3. Mark all completed items in fix_plan.md
+3. Mark all completed items in `@fix_plan.md`
 
 #### Circuit breaker opens unexpectedly
 
@@ -309,19 +313,19 @@ When using `--monitor` with `--live`, tmux creates a 3-pane layout:
 **Solutions:**
 1. Check `.ralph/logs/` for the recurring error
 2. Fix the underlying issue causing the error
-3. Reset circuit breaker: `ralph --reset-circuit`
+3. Reset circuit breaker: `bash .ralph/ralph_loop.sh --reset-circuit`
 
 #### Permission denied halts loop
 
 **Symptoms:** "OPEN - permission_denied" message
 
 **Causes:**
-- Claude Code denied permission to run commands
-- `ALLOWED_TOOLS` in `.ralphrc` too restrictive
+- The active driver denied permission to run commands
+- `ALLOWED_TOOLS` in `.ralph/.ralphrc` too restrictive
 
 **Solutions:**
-1. Update `ALLOWED_TOOLS` in `.ralphrc` to include needed tools
-2. Reset circuit breaker: `ralph --reset-circuit`
+1. Update `ALLOWED_TOOLS` in `.ralph/.ralphrc` to include needed tools
+2. Reset circuit breaker: `bash .ralph/ralph_loop.sh --reset-circuit`
 3. Common tools: `Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)`
 
 #### Session expires mid-project
@@ -334,32 +338,32 @@ When using `--monitor` with `--live`, tmux creates a 3-pane layout:
 
 **Solutions:**
 1. Sessions are designed to expire after 24h (configurable via `SESSION_EXPIRY_HOURS`)
-2. Start a new session with `ralph --reset-session`
-3. Context will be rebuilt from fix_plan.md and specs/
+2. Start a new session with `bash .ralph/ralph_loop.sh --reset-session`
+3. Context will be rebuilt from `@fix_plan.md` and `specs/`
 
 ### Diagnostic Commands
 
 ```bash
 # Check Ralph status
-ralph --status
+bash .ralph/ralph_loop.sh --status
 
 # Check circuit breaker state
-ralph --circuit-status
+bash .ralph/ralph_loop.sh --circuit-status
 
 # Reset circuit breaker
-ralph --reset-circuit
+bash .ralph/ralph_loop.sh --reset-circuit
 
 # Auto-reset circuit breaker (bypasses cooldown)
-ralph --auto-reset-circuit
+bash .ralph/ralph_loop.sh --auto-reset-circuit
 
 # Reset session
-ralph --reset-session
+bash .ralph/ralph_loop.sh --reset-session
 
 # Enable live streaming
-ralph --live
+bash .ralph/ralph_loop.sh --live
 
 # Live streaming with monitoring
-ralph --monitor --live
+bash .ralph/ralph_loop.sh --monitor --live
 ```
 
 ### Log Files

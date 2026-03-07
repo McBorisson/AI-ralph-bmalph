@@ -31,7 +31,6 @@ setup() {
     CLAUDE_SESSION_FILE="$RALPH_DIR/.claude_session_id"
     RALPH_SESSION_FILE="$RALPH_DIR/.ralph_session"
     RALPH_SESSION_HISTORY_FILE="$RALPH_DIR/.ralph_session_history"
-    RALPHRC_FILE="$RALPH_DIR/.ralphrc"
     LIVE_LOG_FILE="$RALPH_DIR/live.log"
 
     # Reset defaults after sourcing (sourcing captures env state in _env_ vars)
@@ -45,7 +44,9 @@ setup() {
     CLAUDE_MIN_VERSION="2.0.76"
     CLAUDE_CODE_CMD="claude"
     PLATFORM_DRIVER="claude-code"
+    DRIVER_DISPLAY_NAME="Claude Code"
     RALPHRC_LOADED=false
+    RUNTIME_CONTEXT_LOADED=false
 
     # Clear _env_ prefixed vars so .ralphrc overrides are not blocked
     _env_MAX_CALLS_PER_HOUR=""
@@ -92,6 +93,20 @@ teardown() {
     MAX_CALLS_PER_HOUR="200"
     load_ralphrc
     assert_equal "$MAX_CALLS_PER_HOUR" "200"
+}
+
+@test "load_ralphrc prefers the bundled .ralph/.ralphrc file" {
+    echo 'MAX_CALLS_PER_HOUR=41' > "$RALPH_DIR/.ralphrc"
+    echo 'MAX_CALLS_PER_HOUR=84' > ".ralphrc"
+    load_ralphrc
+    assert_equal "$MAX_CALLS_PER_HOUR" "41"
+}
+
+@test "load_ralphrc falls back to project-root .ralphrc when bundled config is missing" {
+    rm -f "$RALPH_DIR/.ralphrc"
+    echo 'MAX_CALLS_PER_HOUR=84' > ".ralphrc"
+    load_ralphrc
+    assert_equal "$MAX_CALLS_PER_HOUR" "84"
 }
 
 # ===========================================================================
@@ -399,11 +414,82 @@ EOF
     assert_equal "$CLAUDE_CODE_CMD" "claude"
 }
 
+@test "load_platform_driver: sets driver display name for runtime logging" {
+    PLATFORM_DRIVER="cursor"
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    load_platform_driver
+    assert_equal "$DRIVER_DISPLAY_NAME" "Cursor CLI"
+}
+
+@test "setup_tmux_session uses the active driver name for the output pane" {
+    PLATFORM_DRIVER="cursor"
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    DRIVER_DISPLAY_NAME="Claude Code"
+    CLAUDE_CODE_CMD="claude"
+
+    mkdir -p "$RALPH_DIR/bin"
+    cat > "$RALPH_DIR/bin/tmux" <<'TMUX'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$RALPH_DIR/tmux.log"
+if [[ "$1" == "show-options" ]]; then
+    echo "0"
+fi
+exit 0
+TMUX
+    chmod +x "$RALPH_DIR/bin/tmux"
+    export PATH="$RALPH_DIR/bin:$PATH"
+
+    exit() {
+        return "${1:-0}"
+    }
+
+    setup_tmux_session
+
+    assert_equal "$DRIVER_DISPLAY_NAME" "Cursor CLI"
+    [[ "$CLAUDE_CODE_CMD" != "claude" ]]
+    assert_file_exist "$RALPH_DIR/tmux.log"
+    run grep -F -- "select-pane -t" "$RALPH_DIR/tmux.log"
+    assert_output --partial "Cursor CLI Output"
+}
+
 @test "load_platform_driver: fails for non-existent driver" {
     PLATFORM_DRIVER="nonexistent-platform"
     SCRIPT_DIR="$PROJECT_ROOT/ralph"
     run load_platform_driver
     assert_failure
+}
+
+# ===========================================================================
+# User-facing help and guidance
+# ===========================================================================
+
+@test "show_help uses driver-agnostic bmalph guidance" {
+    run show_help
+
+    assert_success
+    assert_output --partial "Ralph Loop"
+    assert_output --partial "Use 'bmalph init'"
+    assert_output --partial "Show live driver output in real-time"
+    assert_output --partial "Set driver execution timeout in minutes"
+    assert_output --partial "bmalph run"
+    refute_output --partial "Ralph Loop for Claude Code"
+    refute_output --partial "Show Claude Code output in real-time"
+    refute_output --partial "ralph-setup my-project"
+}
+
+@test "main recommends bmalph commands when the prompt file is missing" {
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+
+    run main
+
+    assert_failure
+    assert_output --partial "Prompt file '$RALPH_DIR/PROMPT.md' not found!"
+    assert_output --partial "Initialize bmalph in this project: bmalph init"
+    assert_output --partial "Restore bundled Ralph files in an existing project: bmalph upgrade"
+    assert_output --partial "Generate Ralph task files after planning: bmalph implement"
+    refute_output --partial "ralph-enable"
+    refute_output --partial "ralph-setup"
+    refute_output --partial "ralph-import"
 }
 
 # ===========================================================================

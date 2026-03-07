@@ -55,7 +55,7 @@ bmalph works with multiple AI coding assistants. Each platform gets BMAD plannin
 - Node.js 20+
 - Bash (WSL or Git Bash on Windows)
 - A supported AI coding platform (see table above)
-- For Ralph loop (Phase 4): Claude Code (`claude`), Codex CLI (`codex`), Copilot CLI (`copilot`), or Cursor CLI (`agent`) in PATH
+- For Ralph loop (Phase 4): Claude Code (`claude`), Codex CLI (`codex`), Copilot CLI (`copilot`), or Cursor CLI (`cursor-agent`; older `agent` installs are also supported)
 
 ## Installation
 
@@ -175,7 +175,7 @@ Then start Ralph:
 bmalph run
 ```
 
-> **Advanced:** You can also run drivers directly with `bash .ralph/drivers/claude-code.sh`, `bash .ralph/drivers/codex.sh`, `bash .ralph/drivers/copilot.sh`, or `bash .ralph/drivers/cursor.sh`.
+> **Advanced:** Ralph loads the platform drivers internally. Start the loop with `bmalph run`, or run `bash .ralph/ralph_loop.sh` directly if you need to bypass the CLI.
 
 Ralph picks stories one by one, implements with TDD, and commits. The loop stops when all stories are done or the circuit breaker triggers.
 
@@ -354,7 +354,8 @@ project/
 │   │   ├── claude-code.sh     # Claude Code driver (uses `claude`)
 │   │   ├── codex.sh           # OpenAI Codex driver (uses `codex exec`)
 │   │   ├── copilot.sh         # GitHub Copilot driver (uses `copilot`, experimental)
-│   │   └── cursor.sh          # Cursor driver (uses `agent`, experimental)
+│   │   ├── cursor.sh          # Cursor driver (uses `cursor-agent`/`agent`, experimental)
+│   │   └── cursor-agent-wrapper.sh # Wrapper for Windows .cmd Cursor installs
 │   ├── lib/                   # Shell libraries
 │   ├── docs/generated/        # Generated documentation
 │   ├── specs/                 # Copied from _bmad-output during transition
@@ -382,7 +383,7 @@ Ralph is a bash loop that spawns fresh AI coding sessions using a **platform dri
 - **Claude Code driver** — invokes `claude` with `--allowedTools` and session resume
 - **Codex driver** — invokes `codex exec` with `--sandbox workspace-write`
 - **Copilot driver** _(experimental)_ — invokes `copilot --autopilot --yolo` with plain-text output
-- **Cursor driver** _(experimental)_ — invokes `agent --print --force` with NDJSON streaming
+- **Cursor driver** _(experimental)_ — invokes `cursor-agent --print --force` (or compatible `agent` installs) with NDJSON streaming
 
 Each iteration:
 
@@ -410,6 +411,7 @@ Ralph requires bash to run. On Windows, install one of:
 ```bash
 # Install Git for Windows from https://git-scm.com/downloads
 # Git Bash is included and works well with bmalph
+# bmalph prefers Git Bash over broken Windows bash.exe shims
 ```
 
 **WSL (Windows Subsystem for Linux)**
@@ -442,6 +444,14 @@ ls -la .ralph/
 | Doctor reports version drift  | Run `bmalph upgrade` to update bundled assets                                |
 | Wrong platform detected       | Re-run `bmalph init --platform <id>` with the correct platform               |
 | Ralph unavailable on platform | Ralph requires a full tier platform (claude-code, codex, copilot, or cursor) |
+
+### Windows: Cursor Driver
+
+`bmalph run --driver cursor` is experimental on Windows and is designed for Git Bash.
+
+- `bmalph` prefers a working Git Bash install instead of Windows `bash.exe` shims.
+- The Cursor driver detects `cursor-agent`, `cursor-agent.cmd`, `agent`, `agent.cmd`, and `%LOCALAPPDATA%\\cursor-agent\\agent.cmd`.
+- On Windows, the driver sends Cursor a short bootstrap prompt that tells it to read the Ralph files from `.ralph/` instead of trying to inline the full prompt on the command line.
 
 ### Reset Installation
 

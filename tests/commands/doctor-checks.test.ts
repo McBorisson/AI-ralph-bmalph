@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+const { mockResolveBashCommand } = vi.hoisted(() => ({
+  mockResolveBashCommand: vi.fn(),
+}));
+
 vi.mock("node:fs/promises", () => ({
   readFile: vi.fn(),
   stat: vi.fn(),
@@ -21,8 +25,13 @@ vi.mock("../../src/utils/constants.js", () => ({
   CONFIG_FILE: "bmalph/config.json",
 }));
 
+vi.mock("../../src/run/ralph-process.js", () => ({
+  resolveBashCommand: mockResolveBashCommand,
+}));
+
 import { readFile, stat } from "node:fs/promises";
 import { readJsonFile } from "../../src/utils/json.js";
+import { resolveBashCommand } from "../../src/run/ralph-process.js";
 import {
   checkNodeVersion,
   checkBash,
@@ -39,6 +48,7 @@ import {
 const mockReadFile = vi.mocked(readFile);
 const mockStat = vi.mocked(stat);
 const mockReadJsonFile = vi.mocked(readJsonFile);
+const mockedResolveBashCommand = vi.mocked(resolveBashCommand);
 
 function enoentError(): NodeJS.ErrnoException {
   const err = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
@@ -101,6 +111,34 @@ describe("checkBash", () => {
     const result = await checkBash("/projects/webapp");
 
     expect(result.label).toBe("bash available");
+  });
+
+  it("passes when a compatible bash executable resolves", async () => {
+    mockedResolveBashCommand.mockResolvedValue("C:\\Program Files\\Git\\bin\\bash.exe");
+
+    const result = await checkBash("/projects/webapp");
+
+    expect(result.passed).toBe(true);
+    expect(result.hint).toBeUndefined();
+  });
+
+  it("fails on Windows when only incompatible bash shims are available", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      mockedResolveBashCommand.mockRejectedValue(
+        new Error("bash is not available. Install Git Bash to run Ralph on Windows.")
+      );
+
+      const result = await checkBash("/projects/webapp");
+
+      expect(result.passed).toBe(false);
+      expect(result.detail).toContain("Git Bash");
+      expect(result.hint).toContain("Git Bash");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
   });
 });
 

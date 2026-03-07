@@ -3,8 +3,10 @@ import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 
 const mockSpawn = vi.fn();
+const mockExecFileSync = vi.fn();
 vi.mock("node:child_process", () => ({
   spawn: mockSpawn,
+  execFileSync: mockExecFileSync,
 }));
 
 const mockExists = vi.fn();
@@ -42,6 +44,7 @@ describe("validateBashAvailable", () => {
   let originalPath: string | undefined;
 
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
     originalPath = process.env.PATH;
   });
@@ -71,10 +74,85 @@ describe("validateBashAvailable", () => {
     const { validateBashAvailable } = await import("../../src/run/ralph-process.js");
     await expect(validateBashAvailable()).rejects.toThrow("bash");
   });
+
+  it("throws when bash returns a non-zero exit code", async () => {
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChild();
+      process.nextTick(() => child.emit("close", 1));
+      return child;
+    });
+
+    const { validateBashAvailable } = await import("../../src/run/ralph-process.js");
+    await expect(validateBashAvailable()).rejects.toThrow("bash");
+  });
+
+  it("times out when bash validation hangs", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+    try {
+      const mockChild = createMockChild();
+      mockSpawn.mockReturnValue(mockChild);
+
+      const { validateBashAvailable } = await import("../../src/run/ralph-process.js");
+
+      await expect(validateBashAvailable()).rejects.toThrow("bash");
+      expect(mockChild.kill).toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  }, 10000);
+
+  it("filters Windows shim bash paths and caches a working Git Bash binary", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      mockExecFileSync.mockReturnValue(
+        "C:\\Windows\\System32\\bash.exe\r\nC:\\Program Files\\Git\\bin\\bash.exe\r\n"
+      );
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        const child = createMockChild();
+        process.nextTick(() => {
+          if (args[0] === "--version") {
+            child.emit("close", command.includes("Git\\bin\\bash.exe") ? 0 : 1);
+          }
+        });
+        return child;
+      });
+
+      const { validateBashAvailable, spawnRalphLoop } =
+        await import("../../src/run/ralph-process.js");
+
+      await expect(validateBashAvailable()).resolves.toBeUndefined();
+
+      const loopChild = createMockChild();
+      mockSpawn.mockReset();
+      mockSpawn.mockReturnValue(loopChild);
+
+      spawnRalphLoop("C:\\Users\\Test\\project", "cursor", { inheritStdio: false });
+
+      expect(mockExecFileSync).toHaveBeenCalledWith("where", ["bash"], expect.any(Object));
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "C:\\Program Files\\Git\\bin\\bash.exe",
+        ["./.ralph/ralph_loop.sh"],
+        expect.objectContaining({
+          cwd: "C:\\Users\\Test\\project",
+          env: expect.objectContaining({ PLATFORM_DRIVER: "cursor" }),
+        })
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
 });
 
 describe("validateRalphLoop", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
   });
 
@@ -103,6 +181,7 @@ describe("validateRalphLoop", () => {
 
 describe("spawnRalphLoop", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
   });
 

@@ -26,6 +26,7 @@ DOCS_DIR="$RALPH_DIR/docs/generated"
 STATUS_FILE="$RALPH_DIR/status.json"
 PROGRESS_FILE="$RALPH_DIR/progress.json"
 CLAUDE_CODE_CMD="claude"
+DRIVER_DISPLAY_NAME="Claude Code"
 SLEEP_DURATION=3600     # 1 hour in seconds
 LIVE_OUTPUT=false       # Show Claude Code output in real-time (streaming)
 LIVE_LOG_FILE="$RALPH_DIR/live.log"  # Fixed file for live output monitoring
@@ -95,17 +96,36 @@ MAX_CONSECUTIVE_TEST_LOOPS=3
 MAX_CONSECUTIVE_DONE_SIGNALS=2
 TEST_PERCENTAGE_THRESHOLD=30  # If more than 30% of recent loops are test-only, flag it
 
-# .ralphrc configuration file
-RALPHRC_FILE=".ralphrc"
+# Ralph configuration file
+# bmalph installs .ralph/.ralphrc. Fall back to a project-root .ralphrc for
+# older standalone Ralph layouts.
+RALPHRC_FILE="${RALPHRC_FILE:-$RALPH_DIR/.ralphrc}"
 RALPHRC_LOADED=false
 
 # Platform driver (set from .ralphrc or environment)
 PLATFORM_DRIVER="${PLATFORM_DRIVER:-claude-code}"
+RUNTIME_CONTEXT_LOADED=false
 
-# load_ralphrc - Load project-specific configuration from .ralphrc
+# resolve_ralphrc_file - Resolve the Ralph config path
+resolve_ralphrc_file() {
+    if [[ -f "$RALPHRC_FILE" ]]; then
+        echo "$RALPHRC_FILE"
+        return 0
+    fi
+
+    if [[ "$RALPHRC_FILE" != ".ralphrc" && -f ".ralphrc" ]]; then
+        echo ".ralphrc"
+        return 0
+    fi
+
+    echo "$RALPHRC_FILE"
+}
+
+# load_ralphrc - Load project-specific configuration from .ralph/.ralphrc
 #
-# This function sources .ralphrc if it exists, applying project-specific
-# settings. Environment variables take precedence over .ralphrc values.
+# This function sources the bundled .ralph/.ralphrc file when present, falling
+# back to a project-root .ralphrc for older standalone Ralph layouts.
+# Environment variables take precedence over config values.
 #
 # Configuration values that can be overridden:
 #   - MAX_CALLS_PER_HOUR
@@ -120,15 +140,18 @@ PLATFORM_DRIVER="${PLATFORM_DRIVER:-claude-code}"
 #   - RALPH_VERBOSE
 #
 load_ralphrc() {
-    if [[ ! -f "$RALPHRC_FILE" ]]; then
+    local config_file
+    config_file="$(resolve_ralphrc_file)"
+
+    if [[ ! -f "$config_file" ]]; then
         return 0
     fi
 
-    # Source .ralphrc (this may override default values)
+    # Source config (this may override default values)
     # shellcheck source=/dev/null
-    source "$RALPHRC_FILE"
+    source "$config_file"
 
-    # Map .ralphrc variable names to internal names
+    # Map config variable names to internal names
     if [[ -n "${ALLOWED_TOOLS:-}" ]]; then
         CLAUDE_ALLOWED_TOOLS="$ALLOWED_TOOLS"
     fi
@@ -155,6 +178,7 @@ load_ralphrc() {
     [[ -n "$_env_CB_COOLDOWN_MINUTES" ]] && CB_COOLDOWN_MINUTES="$_env_CB_COOLDOWN_MINUTES"
     [[ -n "$_env_CB_AUTO_RESET" ]] && CB_AUTO_RESET="$_env_CB_AUTO_RESET"
 
+    RALPHRC_FILE="$config_file"
     RALPHRC_LOADED=true
     return 0
 }
@@ -175,8 +199,25 @@ load_platform_driver() {
 
     # Set CLI binary from driver
     CLAUDE_CODE_CMD="$(driver_cli_binary)"
+    DRIVER_DISPLAY_NAME="$(driver_display_name)"
 
-    log_status "INFO" "Platform driver: $(driver_display_name) ($(driver_cli_binary))"
+    log_status "INFO" "Platform driver: $DRIVER_DISPLAY_NAME ($CLAUDE_CODE_CMD)"
+}
+
+initialize_runtime_context() {
+    if [[ "$RUNTIME_CONTEXT_LOADED" == "true" ]]; then
+        return 0
+    fi
+
+    if load_ralphrc; then
+        if [[ "$RALPHRC_LOADED" == "true" ]]; then
+            log_status "INFO" "Loaded configuration from $RALPHRC_FILE"
+        fi
+    fi
+
+    # Load platform driver after config so PLATFORM_DRIVER can be overridden.
+    load_platform_driver
+    RUNTIME_CONTEXT_LOADED=true
 }
 
 # Colors for terminal output
@@ -217,6 +258,8 @@ setup_tmux_session() {
     local ralph_home="${RALPH_HOME:-$HOME/.ralph}"
     local project_dir="$(pwd)"
 
+    initialize_runtime_context
+
     # Get the tmux base-index to handle custom configurations (e.g., base-index 1)
     local base_win
     base_win=$(get_tmux_base_index)
@@ -235,7 +278,7 @@ setup_tmux_session() {
     # Split right pane horizontally (top: Claude output, bottom: status)
     tmux split-window -v -t "$session_name:${base_win}.1" -c "$project_dir"
 
-    # Right-top pane (pane 1): Live Claude Code output
+    # Right-top pane (pane 1): Live driver output
     tmux send-keys -t "$session_name:${base_win}.1" "tail -f '$project_dir/$LIVE_LOG_FILE'" Enter
 
     # Right-bottom pane (pane 2): Ralph status monitor
@@ -304,7 +347,7 @@ setup_tmux_session() {
 
     # Set pane titles (requires tmux 2.6+)
     tmux select-pane -t "$session_name:${base_win}.0" -T "Ralph Loop"
-    tmux select-pane -t "$session_name:${base_win}.1" -T "Claude Output"
+    tmux select-pane -t "$session_name:${base_win}.1" -T "$DRIVER_DISPLAY_NAME Output"
     tmux select-pane -t "$session_name:${base_win}.2" -T "Status"
 
     # Set window title
@@ -312,7 +355,7 @@ setup_tmux_session() {
 
     log_status "SUCCESS" "Tmux session created with 3 panes:"
     log_status "INFO" "  Left:         Ralph loop"
-    log_status "INFO" "  Right-top:    Claude Code live output"
+    log_status "INFO" "  Right-top:    $DRIVER_DISPLAY_NAME live output"
     log_status "INFO" "  Right-bottom: Status monitor"
     log_status "INFO" ""
     log_status "INFO" "Use Ctrl+B then D to detach from session"
@@ -996,9 +1039,9 @@ execute_claude_code() {
     fi
     echo "$loop_start_sha" > "$RALPH_DIR/.loop_start_sha"
 
-    log_status "LOOP" "Executing Claude Code (Call $calls_made/$MAX_CALLS_PER_HOUR)"
+    log_status "LOOP" "Executing $DRIVER_DISPLAY_NAME (Call $calls_made/$MAX_CALLS_PER_HOUR)"
     local timeout_seconds=$((CLAUDE_TIMEOUT_MINUTES * 60))
-    log_status "INFO" "⏳ Starting Claude Code execution... (timeout: ${CLAUDE_TIMEOUT_MINUTES}m)"
+    log_status "INFO" "⏳ Starting $DRIVER_DISPLAY_NAME execution... (timeout: ${CLAUDE_TIMEOUT_MINUTES}m)"
 
     # Build loop context for session continuity
     local loop_context=""
@@ -1070,8 +1113,8 @@ execute_claude_code() {
     fi
 
     if [[ "$LIVE_OUTPUT" == "true" ]]; then
-        log_status "INFO" "📺 Live output mode enabled - showing Claude Code streaming..."
-        echo -e "${PURPLE}━━━━━━━━━━━━━━━━ Claude Code Output ━━━━━━━━━━━━━━━━${NC}"
+        log_status "INFO" "📺 Live output mode enabled - showing $DRIVER_DISPLAY_NAME streaming..."
+        echo -e "${PURPLE}━━━━━━━━━━━━━━━━ ${DRIVER_DISPLAY_NAME} Output ━━━━━━━━━━━━━━━━${NC}"
 
         # Modify CLAUDE_CMD_ARGS: replace --output-format value with stream-json
         # and add streaming-specific flags
@@ -1182,7 +1225,7 @@ execute_claude_code() {
             then
                 :  # Continue to wait loop
             else
-                log_status "ERROR" "❌ Failed to start Claude Code process (modern mode)"
+                log_status "ERROR" "❌ Failed to start $DRIVER_DISPLAY_NAME process (modern mode)"
                 # Fall back to legacy mode
                 log_status "INFO" "Falling back to legacy mode..."
                 use_modern_cli=false
@@ -1197,7 +1240,7 @@ execute_claude_code() {
             then
                 :  # Continue to wait loop
             else
-                log_status "ERROR" "❌ Failed to start Claude Code process"
+                log_status "ERROR" "❌ Failed to start $DRIVER_DISPLAY_NAME process"
                 return 1
             fi
         fi
@@ -1238,9 +1281,9 @@ EOF
             # Only log if verbose mode is enabled
             if [[ "$VERBOSE_PROGRESS" == "true" ]]; then
                 if [[ -n "$last_line" ]]; then
-                    log_status "INFO" "$progress_indicator Claude Code: $last_line... (${progress_counter}0s)"
+                    log_status "INFO" "$progress_indicator $DRIVER_DISPLAY_NAME: $last_line... (${progress_counter}0s)"
                 else
-                    log_status "INFO" "$progress_indicator Claude Code working... (${progress_counter}0s elapsed)"
+                    log_status "INFO" "$progress_indicator $DRIVER_DISPLAY_NAME working... (${progress_counter}0s elapsed)"
                 fi
             fi
 
@@ -1259,7 +1302,7 @@ EOF
         # Clear progress file
         echo '{"status": "completed", "timestamp": "'$(date '+%Y-%m-%d %H:%M:%S')'"}' > "$PROGRESS_FILE"
 
-        log_status "SUCCESS" "✅ Claude Code execution completed successfully"
+        log_status "SUCCESS" "✅ $DRIVER_DISPLAY_NAME execution completed successfully"
 
         # Save session ID from JSON output (Phase 1.1)
         if [[ "$CLAUDE_USE_CONTINUE" == "true" ]]; then
@@ -1267,7 +1310,7 @@ EOF
         fi
 
         # Analyze the response
-        log_status "INFO" "🔍 Analyzing Claude Code response..."
+        log_status "INFO" "🔍 Analyzing $DRIVER_DISPLAY_NAME response..."
         analyze_response "$output_file" "$loop_count"
         local analysis_exit_code=$?
 
@@ -1356,7 +1399,7 @@ EOF
             log_status "ERROR" "🚫 Claude API 5-hour usage limit reached"
             return 2  # Special return code for API limit
         else
-            log_status "ERROR" "❌ Claude Code execution failed, check: $output_file"
+            log_status "ERROR" "❌ $DRIVER_DISPLAY_NAME execution failed, check: $output_file"
             return 1
         fi
     fi
@@ -1378,22 +1421,14 @@ loop_count=0
 
 # Main loop
 main() {
-    # Load project-specific configuration from .ralphrc
-    if load_ralphrc; then
-        if [[ "$RALPHRC_LOADED" == "true" ]]; then
-            log_status "INFO" "Loaded configuration from .ralphrc"
-        fi
-    fi
-
-    # Load platform driver (after .ralphrc so PLATFORM_DRIVER can be overridden)
-    load_platform_driver
+    initialize_runtime_context
 
     # Validate --allowed-tools now that platform-specific VALID_TOOL_PATTERNS are loaded
     if [[ "${_CLI_ALLOWED_TOOLS:-}" == "true" ]] && ! validate_allowed_tools "$CLAUDE_ALLOWED_TOOLS"; then
         exit 1
     fi
 
-    log_status "SUCCESS" "🚀 Ralph loop starting with Claude Code"
+    log_status "SUCCESS" "🚀 Ralph loop starting with $DRIVER_DISPLAY_NAME"
     log_status "INFO" "Max calls per hour: $MAX_CALLS_PER_HOUR"
     log_status "INFO" "Logs: $LOG_DIR/ | Docs: $DOCS_DIR/ | Status: $STATUS_FILE"
 
@@ -1417,19 +1452,19 @@ main() {
         echo ""
         
         # Check if this looks like a partial Ralph project
-        if [[ -f "$RALPH_DIR/@fix_plan.md" ]] || [[ -d "$RALPH_DIR/specs" ]] || [[ -f "$RALPH_DIR/AGENT.md" ]]; then
-            echo "This appears to be a Ralph project but is missing .ralph/PROMPT.md."
+        if [[ -f "$RALPH_DIR/@fix_plan.md" ]] || [[ -d "$RALPH_DIR/specs" ]] || [[ -f "$RALPH_DIR/@AGENT.md" ]]; then
+            echo "This appears to be a bmalph/Ralph project but is missing .ralph/PROMPT.md."
             echo "You may need to create or restore the PROMPT.md file."
         else
-            echo "This directory is not a Ralph project."
+            echo "This directory is not a bmalph/Ralph project."
         fi
 
         echo ""
         echo "To fix this:"
-        echo "  1. Enable Ralph in existing project: ralph-enable"
-        echo "  2. Create a new project: ralph-setup my-project"
-        echo "  3. Import existing requirements: ralph-import requirements.md"
-        echo "  4. Navigate to an existing Ralph project directory"
+        echo "  1. Initialize bmalph in this project: bmalph init"
+        echo "  2. Restore bundled Ralph files in an existing project: bmalph upgrade"
+        echo "  3. Generate Ralph task files after planning: bmalph implement"
+        echo "  4. Navigate to an existing bmalph/Ralph project directory"
         echo "  5. Or create .ralph/PROMPT.md manually in this directory"
         echo ""
         echo "Ralph projects should contain: .ralph/PROMPT.md, .ralph/@fix_plan.md, .ralph/specs/, src/, etc."
@@ -1496,7 +1531,7 @@ main() {
                 echo -e "${RED}║  PERMISSION DENIED - Loop Halted                          ║${NC}"
                 echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
                 echo ""
-                echo -e "${YELLOW}Claude Code was denied permission to execute commands.${NC}"
+                echo -e "${YELLOW}$DRIVER_DISPLAY_NAME was denied permission to execute commands.${NC}"
                 echo ""
                 echo -e "${YELLOW}To fix this:${NC}"
                 echo "  1. Edit .ralphrc and update ALLOWED_TOOLS to include the required tools"
@@ -1507,8 +1542,8 @@ main() {
                 echo "     - Bash(yarn *)    - All yarn commands"
                 echo ""
                 echo -e "${YELLOW}After updating .ralphrc:${NC}"
-                echo "  ralph --reset-session  # Clear stale session state"
-                echo "  ralph --monitor        # Restart the loop"
+                echo "  bash .ralph/ralph_loop.sh --reset-session  # Clear stale session state"
+                echo "  bmalph run                                 # Restart the loop"
                 echo ""
 
                 # Show current ALLOWED_TOOLS if .ralphrc exists
@@ -1553,7 +1588,7 @@ main() {
             reset_session "circuit_breaker_trip"
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "circuit_breaker_open" "halted" "stagnation_detected"
             log_status "ERROR" "🛑 Circuit breaker has opened - halting loop"
-            log_status "INFO" "Run 'ralph --reset-circuit' to reset the circuit breaker after addressing issues"
+            log_status "INFO" "Run 'bash .ralph/ralph_loop.sh --reset-circuit' to reset the circuit breaker after addressing issues"
             break
         elif [ $exec_result -eq 2 ]; then
             # API 5-hour limit reached - handle specially
@@ -1605,12 +1640,12 @@ main() {
 # Help function
 show_help() {
     cat << HELPEOF
-Ralph Loop for Claude Code
+Ralph Loop
 
 Usage: $0 [OPTIONS]
 
-IMPORTANT: This command must be run from a Ralph project directory.
-           Use 'ralph-setup project-name' to create a new project first.
+IMPORTANT: This command must be run from a bmalph/Ralph project directory.
+           Use 'bmalph init' in your project first.
 
 Options:
     -h, --help              Show this help message
@@ -1619,15 +1654,15 @@ Options:
     -s, --status            Show current status and exit
     -m, --monitor           Start with tmux session and live monitor (requires tmux)
     -v, --verbose           Show detailed progress updates during execution
-    -l, --live              Show Claude Code output in real-time (auto-switches to JSON output)
-    -t, --timeout MIN       Set Claude Code execution timeout in minutes (default: $CLAUDE_TIMEOUT_MINUTES)
+    -l, --live              Show live driver output in real-time (auto-switches to JSON output)
+    -t, --timeout MIN       Set driver execution timeout in minutes (default: $CLAUDE_TIMEOUT_MINUTES)
     --reset-circuit         Reset circuit breaker to CLOSED state
     --circuit-status        Show circuit breaker status and exit
     --auto-reset-circuit    Auto-reset circuit breaker on startup (bypasses cooldown)
     --reset-session         Reset session state and exit (clears session continuity)
 
 Modern CLI Options (Phase 1.1):
-    --output-format FORMAT  Set Claude output format: json or text (default: $CLAUDE_OUTPUT_FORMAT)
+    --output-format FORMAT  Set driver output format: json or text (default: $CLAUDE_OUTPUT_FORMAT)
                             Note: --live mode requires JSON and will auto-switch
     --allowed-tools TOOLS   Comma-separated list of allowed tools (default: $CLAUDE_ALLOWED_TOOLS)
     --no-continue           Disable session continuity across loops
@@ -1643,15 +1678,17 @@ Files created:
     - .ralph/.last_reset: Timestamp of last rate limit reset
 
 Example workflow:
-    ralph-setup my-project     # Create project
-    cd my-project             # Enter project directory
-    $0 --monitor             # Start Ralph with monitoring
+    cd my-project              # Enter project directory
+    bmalph init                # Install bmalph + Ralph files
+    bmalph implement           # Generate Ralph task files
+    $0 --monitor               # Start Ralph with monitoring
 
 Examples:
+    bmalph run                 # Start Ralph via the bmalph CLI
     $0 --calls 50 --prompt my_prompt.md
-    $0 --monitor             # Start with integrated tmux monitoring
-    $0 --live                # Show Claude Code output in real-time (streaming)
-    $0 --live --verbose      # Live streaming + verbose logging
+    $0 --monitor               # Start with integrated tmux monitoring
+    $0 --live                  # Show live driver output in real-time (streaming)
+    $0 --live --verbose        # Live streaming + verbose logging
     $0 --monitor --timeout 30   # 30-minute timeout for complex tasks
     $0 --verbose --timeout 5    # 5-minute timeout with detailed progress
     $0 --output-format text     # Use legacy text output format

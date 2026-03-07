@@ -79,7 +79,10 @@ _mock_cli() {
     [[ -n "$stdout" ]] && printf 'cat << '"'"'MOCK_OUT'"'"'\n%s\nMOCK_OUT\n' "$stdout" >> "$RALPH_DIR/bin/$cmd"
     printf 'exit %d\n' "$exit_code" >> "$RALPH_DIR/bin/$cmd"
     chmod +x "$RALPH_DIR/bin/$cmd"
-    [[ ":$PATH:" != *":$RALPH_DIR/bin:"* ]] && export PATH="$RALPH_DIR/bin:$PATH"
+    if [[ ":$PATH:" != *":$RALPH_DIR/bin:"* ]]; then
+        export PATH="$RALPH_DIR/bin:$PATH"
+    fi
+    return 0
 }
 
 # Load a bats helper from local test_helper or system paths

@@ -719,10 +719,16 @@ describe("installer", () => {
       expect(content).toContain(".ralph/specs/");
     });
 
-    it("PROMPT.md references fix_plan.md", async () => {
+    it("PROMPT.md references .ralph/@fix_plan.md", async () => {
       await installProject(testDir);
       const content = await readFile(join(testDir, ".ralph/PROMPT.md"), "utf-8");
-      expect(content).toContain("fix_plan.md");
+      expect(content).toContain(".ralph/@fix_plan.md");
+    });
+
+    it("PROMPT.md references .ralph/@AGENT.md", async () => {
+      await installProject(testDir);
+      const content = await readFile(join(testDir, ".ralph/PROMPT.md"), "utf-8");
+      expect(content).toContain(".ralph/@AGENT.md");
     });
 
     it("PROMPT.md references docs/ for project knowledge", async () => {
@@ -769,6 +775,25 @@ describe("installer", () => {
       await installProject(testDir);
       const content = await readFile(join(testDir, ".ralph/RALPH-REFERENCE.md"), "utf-8");
       expect(content).toContain("Troubleshooting");
+    });
+
+    it("RALPH-REFERENCE.md documents the installed .ralph/.ralphrc path", async () => {
+      await installProject(testDir);
+      const content = await readFile(join(testDir, ".ralph/RALPH-REFERENCE.md"), "utf-8");
+      expect(content).toContain(".ralph/.ralphrc");
+    });
+
+    it("ralph_import.sh points deprecated users to bmalph and @fix_plan.md", async () => {
+      await installProject(testDir);
+      const content = await readFile(join(testDir, ".ralph/ralph_import.sh"), "utf-8");
+      expect(content).toContain("bmalph implement");
+      expect(content).toContain(".ralph/@fix_plan.md");
+    });
+
+    it("ralph_monitor.sh deprecation guidance points to bmalph run", async () => {
+      await installProject(testDir);
+      const content = await readFile(join(testDir, ".ralph/ralph_monitor.sh"), "utf-8");
+      expect(content).toContain("Use `bmalph run` instead");
     });
   });
 
