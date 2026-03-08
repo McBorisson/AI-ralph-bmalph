@@ -20,6 +20,7 @@ import { detectTechStack, customizeAgentMd } from "./tech-stack.js";
 import { findArtifactsDir, resolvePlanningSpecsSubpath } from "./artifacts.js";
 import { runPreflight, PreflightValidationError } from "./preflight.js";
 import { collectTransitionArtifacts, combineArtifactContents } from "./artifact-collection.js";
+import { compareStoryIds } from "./story-id.js";
 import {
   extractProjectContext,
   generateProjectContextMd,
@@ -30,17 +31,6 @@ import { generateSpecsChangelog, formatChangelog } from "./specs-changelog.js";
 import { generateSpecsIndex, formatSpecsIndexMd } from "./specs-index.js";
 import { parseSprintStatus } from "./sprint-status.js";
 import { prepareSpecsDirectory } from "./specs-sync.js";
-
-function compareStoryIds(left: string, right: string): number {
-  const [leftEpic = 0, leftStory = 0] = left.split(".").map((part) => Number(part));
-  const [rightEpic = 0, rightStory = 0] = right.split(".").map((part) => Number(part));
-
-  if (leftEpic !== rightEpic) {
-    return leftEpic - rightEpic;
-  }
-
-  return leftStory - rightStory;
-}
 
 function ensureUniqueStoryIds(stories: Story[]): void {
   const sourceById = new Map<string, string>();
@@ -181,6 +171,11 @@ export async function runTransition(
     stories,
     parseWarnings
   );
+  const preflightIssues = options?.force
+    ? preflightResult.issues.map((issue) =>
+        issue.severity === "error" ? { ...issue, severity: "warning" as const } : issue
+      )
+    : preflightResult.issues;
 
   if (!preflightResult.pass) {
     if (options?.force) {
@@ -414,13 +409,14 @@ export async function runTransition(
   }
 
   // Collect warnings from all sources
-  const preflightWarnings = preflightResult.issues
-    .filter((i) => i.severity === "warning" || (i.severity === "error" && options?.force))
+  const preflightWarnings = preflightIssues
+    .filter((i) => i.severity === "warning")
     .map((i) => i.message);
 
-  // Keep parse warnings not already covered by preflight (e.g., malformed IDs)
+  // Keep parse warnings not already covered by preflight.
   const nonPreflightParseWarnings = parseWarnings.filter(
     (w) =>
+      !/malformed story id/i.test(w) &&
       !/has no acceptance criteria/i.test(w) &&
       !/has no description/i.test(w) &&
       !/not under an epic/i.test(w)
@@ -451,7 +447,7 @@ export async function runTransition(
     storiesCount: stories.length,
     warnings,
     fixPlanPreserved,
-    preflightIssues: preflightResult.issues,
+    preflightIssues,
     generatedFiles,
   };
 }

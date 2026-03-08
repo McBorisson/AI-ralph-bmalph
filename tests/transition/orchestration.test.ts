@@ -947,6 +947,95 @@ Scope.
       expect(result.warnings).toContainEqual(expect.stringMatching(/no-go/i));
     });
 
+    it("blocks transition on malformed story IDs without force", async () => {
+      await mkdir(join(testDir, "_bmad-output/planning-artifacts"), { recursive: true });
+      await writeFile(
+        join(testDir, "_bmad-output/planning-artifacts/stories.md"),
+        [
+          "## Epic 1: Core",
+          "",
+          "### Story 1.1: Valid feature",
+          "",
+          "Description.",
+          "",
+          "**Acceptance Criteria:**",
+          "**Given** valid input",
+          "**When** the feature runs",
+          "**Then** it succeeds",
+          "",
+          "### Story 1..2: Broken identifier",
+          "",
+          "Description.",
+          "",
+          "**Acceptance Criteria:**",
+          "**Given** malformed data",
+          "**When** transition runs",
+          "**Then** it is rejected",
+        ].join("\n")
+      );
+
+      const error = await runTransition(testDir).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(PreflightValidationError);
+      expect((error as PreflightValidationError).issues).toContainEqual(
+        expect.objectContaining({
+          id: "E2",
+          severity: "error",
+          message: expect.stringMatching(/malformed.*story id/i),
+        })
+      );
+    });
+
+    it("respects force option to downgrade malformed story IDs and keeps valid stories first", async () => {
+      await mkdir(join(testDir, "_bmad-output/planning-artifacts"), { recursive: true });
+      await writeFile(
+        join(testDir, "_bmad-output/planning-artifacts/stories.md"),
+        [
+          "## Epic 1: Core",
+          "",
+          "### Story 1.1: Valid feature",
+          "",
+          "Description.",
+          "",
+          "**Acceptance Criteria:**",
+          "**Given** valid input",
+          "**When** the feature runs",
+          "**Then** it succeeds",
+          "",
+          "### Story 1..2: Broken identifier",
+          "",
+          "Description.",
+          "",
+          "**Acceptance Criteria:**",
+          "**Given** malformed data",
+          "**When** transition runs",
+          "**Then** it is warned about",
+          "",
+          "### Story 1.2.3: Extra segment identifier",
+          "",
+          "Description.",
+          "",
+          "**Acceptance Criteria:**",
+          "**Given** malformed data",
+          "**When** transition runs",
+          "**Then** output stays deterministic",
+        ].join("\n")
+      );
+
+      const result = await runTransition(testDir, { force: true });
+      const fixPlan = await readFile(join(testDir, ".ralph/@fix_plan.md"), "utf-8");
+
+      expect(result.preflightIssues).toContainEqual(
+        expect.objectContaining({
+          id: "E2",
+          severity: "warning",
+        })
+      );
+      expect(result.warnings).toContainEqual(expect.stringMatching(/malformed.*story id/i));
+      expect(fixPlan.indexOf("Story 1.1")).toBeLessThan(fixPlan.indexOf("Story 1..2"));
+      expect(fixPlan.indexOf("Story 1.1")).toBeLessThan(fixPlan.indexOf("Story 1.2.3"));
+    });
+
     it("includes preflight warnings in TransitionResult.warnings", async () => {
       await mkdir(join(testDir, "_bmad-output/planning-artifacts"), { recursive: true });
       await writeFile(

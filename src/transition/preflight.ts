@@ -111,7 +111,15 @@ export function validateStories(stories: Story[], parseWarnings: string[]): Pref
   const issues: PreflightIssue[] = [];
 
   for (const warning of parseWarnings) {
-    if (/has no acceptance criteria/i.test(warning)) {
+    if (/malformed story id/i.test(warning)) {
+      issues.push({
+        id: "E2",
+        severity: "error",
+        message: warning,
+        suggestion:
+          "Fix malformed story headers to use the N.M format, or use --force to continue with deterministic fallback ordering.",
+      });
+    } else if (/has no acceptance criteria/i.test(warning)) {
       issues.push({
         id: "W8",
         severity: "warning",

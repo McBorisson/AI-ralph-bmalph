@@ -222,6 +222,86 @@ describe("bmalph implement CLI", { timeout: 60000 }, () => {
     expect(result.stderr).toContain("Pre-flight validation failed");
   });
 
+  it("fails with exit code 1 and surfaces E2 when story IDs are malformed", async () => {
+    project = await createTestProject();
+    await runInit(project.path);
+
+    const artifactsDir = join(project.path, "_bmad-output/planning-artifacts");
+    await mkdir(artifactsDir, { recursive: true });
+    await writeFile(
+      join(artifactsDir, "epics-and-stories.md"),
+      `# Epics and Stories
+
+## Epic 1: Workspace Access
+
+### Story 1.1: Sign in
+
+Description.
+
+**Acceptance Criteria:**
+**Given** a valid account
+**When** sign in runs
+**Then** access is granted
+
+### Story 1..2: Broken identifier
+
+Description.
+
+**Acceptance Criteria:**
+**Given** malformed planning output
+**When** implement runs
+**Then** transition stops
+`
+    );
+
+    const result = await runImplement(project.path);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toMatch(/malformed.*story id/i);
+    expect(result.stderr).toContain("Pre-flight validation failed");
+  });
+
+  it("succeeds with --force and keeps malformed story ID warnings visible", async () => {
+    project = await createTestProject();
+    await runInit(project.path);
+
+    const artifactsDir = join(project.path, "_bmad-output/planning-artifacts");
+    await mkdir(artifactsDir, { recursive: true });
+    await writeFile(
+      join(artifactsDir, "epics-and-stories.md"),
+      `# Epics and Stories
+
+## Epic 1: Workspace Access
+
+### Story 1.1: Sign in
+
+Description.
+
+**Acceptance Criteria:**
+**Given** a valid account
+**When** sign in runs
+**Then** access is granted
+
+### Story 1.2.3: Broken identifier
+
+Description.
+
+**Acceptance Criteria:**
+**Given** malformed planning output
+**When** implement runs with force
+**Then** transition continues deterministically
+`
+    );
+
+    const result = await runImplement(project.path, true);
+    const fixPlan = await readFile(join(project.path, ".ralph/@fix_plan.md"), "utf-8");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Transition complete");
+    expect(result.stdout).toMatch(/malformed.*story id/i);
+    expect(fixPlan.indexOf("Story 1.1")).toBeLessThan(fixPlan.indexOf("Story 1.2.3"));
+  });
+
   it("fails with exit code 1 when no stories file exists", async () => {
     project = await createTestProject();
     await runInit(project.path);

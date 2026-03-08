@@ -1,4 +1,9 @@
 import type { Story, FixPlanItemWithTitle } from "./types.js";
+import {
+  createFixPlanStoryLinePattern,
+  createOpenFixPlanStoryLinePattern,
+  formatStoryAnchor,
+} from "./story-id.js";
 
 function buildSpecPath(planningSpecsSubpath: string, fileName: string): string {
   const normalizedPath = [planningSpecsSubpath, fileName].filter(Boolean).join("/");
@@ -38,7 +43,7 @@ export function generateFixPlan(
     }
 
     // Add spec-link for easy reference to full story details
-    const anchor = story.id.replace(".", "-");
+    const anchor = formatStoryAnchor(story.id);
     const fileName = storiesFileName || story.sourceFile || "stories.md";
     const specPath = buildSpecPath(planningSpecsSubpath, fileName);
     lines.push(`  > Spec: ${specPath}#story-${anchor}`);
@@ -64,8 +69,7 @@ export function hasFixPlanProgress(content: string): boolean {
 
 export function parseFixPlan(content: string): FixPlanItemWithTitle[] {
   const items: FixPlanItemWithTitle[] = [];
-  // Match: - [x] Story 1.1: Title  or  - [ ] Story 2.3: Title
-  const pattern = /^\s*-\s*\[([ xX])\]\s*Story\s+(\d+\.\d+):\s*(.+?)$/gm;
+  const pattern = createFixPlanStoryLinePattern();
   let match;
   while ((match = pattern.exec(content)) !== null) {
     items.push({
@@ -158,20 +162,17 @@ export function mergeFixPlanProgress(
   completedTitles?: Map<string, string>
 ): string {
   // Replace [ ] with [x] for completed story IDs or title matches
-  return newFixPlan.replace(
-    /^(\s*-\s*)\[ \](\s*Story\s+(\d+\.\d+):)/gm,
-    (match, prefix, suffix, id) => {
-      if (completedIds.has(id)) return `${prefix}[x]${suffix}`;
+  return newFixPlan.replace(createOpenFixPlanStoryLinePattern(), (match, prefix, suffix, id) => {
+    if (completedIds.has(id)) return `${prefix}[x]${suffix}`;
 
-      // Title-based fallback: check if title matches a completed story
-      if (titleMap && completedTitles) {
-        const title = titleMap.get(id);
-        if (title && completedTitles.has(normalizeTitle(title))) {
-          return `${prefix}[x]${suffix}`;
-        }
+    // Title-based fallback: check if title matches a completed story
+    if (titleMap && completedTitles) {
+      const title = titleMap.get(id);
+      if (title && completedTitles.has(normalizeTitle(title))) {
+        return `${prefix}[x]${suffix}`;
       }
-
-      return match;
     }
-  );
+
+    return match;
+  });
 }

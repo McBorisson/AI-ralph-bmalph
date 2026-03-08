@@ -1,4 +1,9 @@
 import type { Story } from "./types.js";
+import {
+  STORY_HEADER_PATTERN,
+  formatMalformedStoryIdWarning,
+  isCanonicalStoryId,
+} from "./story-id.js";
 
 // Cached regex patterns for performance (compiled once at module load)
 const GIVEN_LINE_PATTERN = /^(?:[-*]\s+)?(?:\*\*)?Given(?:\*\*)?\s/i;
@@ -6,8 +11,6 @@ const AC_KEYWORD_LINE_PATTERN = /^(?:[-*]\s+)?(?:\*\*)?(Given|When|Then|And)(?:\
 const BOLD_PATTERN = /\*\*/g;
 const EPIC_HEADER_PATTERN = /^##\s+Epic\s+\d+:\s+(.+)/;
 const HEADING_PATTERN = /^#{2,3}\s/;
-const STORY_HEADER_PATTERN = /^###\s+Story\s+([\d.]+):\s+(.+)/;
-const STORY_ID_PATTERN = /^\d+\.\d+$/;
 const AC_HEADING_PATTERN = /^\*?\*?Acceptance Criteria\*?\*?:?/i;
 
 export interface ParseStoriesResult {
@@ -108,8 +111,8 @@ export function parseStoriesWithWarnings(
       const title = storyMatch[2]!.trim();
 
       // Validate story ID format (should be like "1.1", "2.3", etc.)
-      if (!STORY_ID_PATTERN.test(id)) {
-        warnings.push(`Story "${title}" has malformed ID "${id}" (expected format: N.M)`);
+      if (!isCanonicalStoryId(id)) {
+        warnings.push(formatMalformedStoryIdWarning(id, title));
       }
 
       // Collect all body lines until next heading
