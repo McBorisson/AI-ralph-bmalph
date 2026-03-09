@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     include: ["tests/**/*.test.ts"],
+    exclude: ["tests/e2e/**/*.e2e.test.ts"],
     fileParallelism: true,
     coverage: {
       provider: "v8",

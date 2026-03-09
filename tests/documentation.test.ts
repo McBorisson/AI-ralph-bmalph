@@ -14,7 +14,9 @@ describe("documentation", () => {
 
     expect(readme).toContain("`cursor-agent -p --force --output-format json`");
     expect(readme).toContain("switches to `stream-json` only for live output");
-    expect(readme).toContain("Read `_bmad/COMMANDS.md` and ask Cursor to run the BMAD master agent");
+    expect(readme).toContain(
+      "Read `_bmad/COMMANDS.md` and ask Cursor to run the BMAD master agent"
+    );
   });
 
   it("documents Cursor preflight and live-output behavior in the Ralph reference", () => {

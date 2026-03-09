@@ -1,9 +1,24 @@
-import { readConfig } from "../utils/config.js";
+import { join } from "node:path";
 import { isEnoent, formatError } from "../utils/errors.js";
 import { warn } from "../utils/logger.js";
-import { getPlatform } from "./registry.js";
+import { readJsonFile } from "../utils/json.js";
+import { CONFIG_FILE } from "../utils/constants.js";
+import { getPlatform, isPlatformId } from "./registry.js";
 import { detectPlatform } from "./detect.js";
-import type { Platform } from "./types.js";
+import type { Platform, PlatformId } from "./types.js";
+
+function extractConfiguredPlatform(data: unknown): PlatformId | null {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return null;
+  }
+
+  const platform = (data as Record<string, unknown>).platform;
+  if (typeof platform !== "string" || !isPlatformId(platform)) {
+    return null;
+  }
+
+  return platform;
+}
 
 /**
  * Resolve the platform for a project from its config, defaulting to claude-code.
@@ -13,9 +28,10 @@ import type { Platform } from "./types.js";
  */
 export async function resolveProjectPlatform(projectDir: string): Promise<Platform> {
   try {
-    const config = await readConfig(projectDir);
-    if (config?.platform) {
-      return getPlatform(config.platform);
+    const config = await readJsonFile<unknown>(join(projectDir, CONFIG_FILE));
+    const configuredPlatform = extractConfiguredPlatform(config);
+    if (configuredPlatform) {
+      return getPlatform(configuredPlatform);
     }
   } catch (err) {
     if (!isEnoent(err)) {

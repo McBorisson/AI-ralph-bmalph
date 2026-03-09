@@ -19,6 +19,10 @@ vi.mock("../../src/utils/config.js", () => ({
   writeConfig: vi.fn(),
 }));
 
+vi.mock("../../src/utils/json.js", () => ({
+  readJsonFile: vi.fn(),
+}));
+
 vi.mock("../../src/platform/registry.js", () => ({
   getPlatform: vi.fn((id: string) => ({
     id,
@@ -31,6 +35,9 @@ vi.mock("../../src/platform/registry.js", () => ({
     generateInstructionsSnippet: () => "## BMAD-METHOD Integration\n\nSnippet content",
     getDoctorChecks: () => [],
   })),
+  isPlatformId: vi.fn((value: string) =>
+    ["claude-code", "codex", "cursor", "windsurf", "copilot", "aider"].includes(value)
+  ),
 }));
 
 describe("upgrade command", () => {
@@ -268,16 +275,13 @@ describe("upgrade command", () => {
     it("uses platform from config when available", async () => {
       const { isInitialized, copyBundledAssets, mergeInstructionsFile } =
         await import("../../src/installer.js");
-      const { readConfig } = await import("../../src/utils/config.js");
+      const { readJsonFile } = await import("../../src/utils/json.js");
       const { getPlatform } = await import("../../src/platform/registry.js");
 
       vi.mocked(isInitialized).mockResolvedValue(true);
       vi.mocked(copyBundledAssets).mockResolvedValue({ updatedPaths: ["_bmad/"] });
       vi.mocked(mergeInstructionsFile).mockResolvedValue(undefined);
-      vi.mocked(readConfig).mockResolvedValue({
-        name: "codex-project",
-        description: "A codex project",
-        createdAt: "2025-06-15T10:30:00.000Z",
+      vi.mocked(readJsonFile).mockResolvedValue({
         platform: "codex",
       });
 
@@ -290,16 +294,14 @@ describe("upgrade command", () => {
     it("defaults to claude-code when config has no platform", async () => {
       const { isInitialized, copyBundledAssets, mergeInstructionsFile } =
         await import("../../src/installer.js");
-      const { readConfig } = await import("../../src/utils/config.js");
+      const { readJsonFile } = await import("../../src/utils/json.js");
       const { getPlatform } = await import("../../src/platform/registry.js");
 
       vi.mocked(isInitialized).mockResolvedValue(true);
       vi.mocked(copyBundledAssets).mockResolvedValue({ updatedPaths: ["_bmad/"] });
       vi.mocked(mergeInstructionsFile).mockResolvedValue(undefined);
-      vi.mocked(readConfig).mockResolvedValue({
+      vi.mocked(readJsonFile).mockResolvedValue({
         name: "legacy-project",
-        description: "A legacy project",
-        createdAt: "2025-01-01T00:00:00.000Z",
       });
 
       const { upgradeCommand } = await import("../../src/commands/upgrade.js");

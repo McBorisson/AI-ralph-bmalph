@@ -84,16 +84,58 @@ describe("resolveProjectPlatform", () => {
     expect(platform.id).toBe("cursor");
   });
 
+  it("uses platform from partial config without requiring unrelated fields", async () => {
+    await mkdir(join(testDir, "bmalph"), { recursive: true });
+    await writeFile(
+      join(testDir, "bmalph/config.json"),
+      JSON.stringify({
+        platform: "cursor",
+      })
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const { resolveProjectPlatform } = await import("../../src/platform/resolve.js");
+    const platform = await resolveProjectPlatform(testDir);
+
+    expect(platform.id).toBe("cursor");
+    expect(logSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+  });
+
+  it("does not warn when legacy config is missing createdAt", async () => {
+    await mkdir(join(testDir, "bmalph"), { recursive: true });
+    await writeFile(
+      join(testDir, "bmalph/config.json"),
+      JSON.stringify({
+        name: "legacy-project",
+      })
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const { resolveProjectPlatform } = await import("../../src/platform/resolve.js");
+    const platform = await resolveProjectPlatform(testDir);
+
+    expect(platform.id).toBe("claude-code");
+    expect(logSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+  });
+
   it("falls back to claude-code when config.json is corrupt", async () => {
     await mkdir(join(testDir, "bmalph"), { recursive: true });
     await writeFile(join(testDir, "bmalph/config.json"), "not valid json{{{");
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     const { resolveProjectPlatform } = await import("../../src/platform/resolve.js");
     const platform = await resolveProjectPlatform(testDir);
     expect(platform.id).toBe("claude-code");
 
-    warnSpy.mockRestore();
+    expect(logSpy).toHaveBeenCalled();
+
+    logSpy.mockRestore();
   });
 });

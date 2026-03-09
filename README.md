@@ -456,14 +456,14 @@ ls -la .ralph/
 
 ### Common Issues
 
-| Scenario                      | Solution                                                                     |
-| ----------------------------- | ---------------------------------------------------------------------------- |
-| Commands fail before init     | Run `bmalph init` first                                                      |
+| Scenario                      | Solution                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Commands fail before init     | Run `bmalph init` first                                                                                            |
 | Transition finds no stories   | Create stories in Phase 3 with `/create-epics-stories`, the matching Codex Skill, or the `_bmad/COMMANDS.md` entry |
-| Ralph stops mid-loop          | Circuit breaker detected stagnation. Check `.ralph/logs/`                    |
-| Doctor reports version drift  | Run `bmalph upgrade` to update bundled assets                                |
-| Wrong platform detected       | Re-run `bmalph init --platform <id>` with the correct platform               |
-| Ralph unavailable on platform | Ralph requires a full tier platform (claude-code, codex, copilot, or cursor) |
+| Ralph stops mid-loop          | Circuit breaker detected stagnation. Check `.ralph/logs/`                                                          |
+| Doctor reports version drift  | Run `bmalph upgrade` to update bundled assets                                                                      |
+| Wrong platform detected       | Re-run `bmalph init --platform <id>` with the correct platform                                                     |
+| Ralph unavailable on platform | Ralph requires a full tier platform (claude-code, codex, copilot, or cursor)                                       |
 
 ### Windows: Cursor Driver
 
