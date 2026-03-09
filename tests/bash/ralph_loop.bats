@@ -250,6 +250,25 @@ EOF
     assert_output "session-abc-123"
 }
 
+@test "init_claude_session: reads session ID from legacy JSON file" {
+    jq -n --arg sid "legacy-session-456" --arg ts "$(_minutes_ago_iso 10)" \
+        '{session_id: $sid, timestamp: $ts}' > "$CLAUDE_SESSION_FILE"
+
+    run init_claude_session
+    assert_success
+    assert_output "legacy-session-456"
+}
+
+@test "init_claude_session: does not resume expired legacy JSON session timestamps" {
+    jq -n --arg sid "legacy-session-expired" --arg ts "$(_minutes_ago_iso $((25 * 60)))" \
+        '{session_id: $sid, timestamp: $ts}' > "$CLAUDE_SESSION_FILE"
+
+    run init_claude_session
+    assert_success
+    assert_output ""
+    [[ ! -f "$CLAUDE_SESSION_FILE" ]]
+}
+
 @test "init_claude_session: returns empty for expired session" {
     echo "old-session-456" > "$CLAUDE_SESSION_FILE"
     CLAUDE_SESSION_EXPIRY_HOURS=0
@@ -328,6 +347,17 @@ EOF
     local saved
     saved=$(cat "$CLAUDE_SESSION_FILE")
     assert_equal "$saved" "ses-abc-123"
+}
+
+@test "save_claude_session extracts session ID from Codex JSONL output" {
+    local output_file="$RALPH_DIR/test_output.jsonl"
+    cp "$FIXTURES_DIR/codex_jsonl_response.jsonl" "$output_file"
+
+    save_claude_session "$output_file"
+
+    local saved
+    saved=$(cat "$CLAUDE_SESSION_FILE")
+    assert_equal "$saved" "codex-thread-123"
 }
 
 @test "save_claude_session does nothing when output file missing" {
@@ -598,4 +628,119 @@ PLAN
 
     run execute_claude_code 1
     assert_equal "$status" "2"
+}
+
+@test "execute_claude_code: codex JSONL output is analyzed without silent failure" {
+    _skip_if_xargs_broken
+    echo "0" > "$CALL_COUNT_FILE"
+    echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": []}' > "$EXIT_SIGNALS_FILE"
+
+    _mock_cli codex 0 "$(cat "$FIXTURES_DIR/codex_jsonl_response.jsonl")"
+    CLAUDE_USE_CONTINUE="true"
+    LIVE_OUTPUT=false
+
+    echo "Implement the task" > "$RALPH_DIR/PROMPT.md"
+    PROMPT_FILE="$RALPH_DIR/PROMPT.md"
+
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    PLATFORM_DRIVER="codex"
+    load_platform_driver
+
+    run execute_claude_code 1
+    assert_success
+
+    local saved
+    saved=$(cat "$CLAUDE_SESSION_FILE")
+    assert_equal "$saved" "codex-thread-123"
+
+    run jq -r '.output_format' "$RESPONSE_ANALYSIS_FILE"
+    assert_output "json"
+
+    run jq -r '.analysis.exit_signal' "$RESPONSE_ANALYSIS_FILE"
+    assert_output "true"
+}
+
+@test "execute_claude_code: unsupported session drivers do not pass resume IDs" {
+    _skip_if_xargs_broken
+    echo "0" > "$CALL_COUNT_FILE"
+    echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": []}' > "$EXIT_SIGNALS_FILE"
+    echo "stale-session-123" > "$CLAUDE_SESSION_FILE"
+
+    mkdir -p "$RALPH_DIR/bin"
+    cat > "$RALPH_DIR/bin/cursor-agent" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$RALPH_DIR/cursor_args.log"
+cat <<'OUT'
+{"type":"text","content":"Still working on the auth module."}
+OUT
+exit 0
+EOF
+    chmod +x "$RALPH_DIR/bin/cursor-agent"
+    export PATH="$RALPH_DIR/bin:$PATH"
+
+    CLAUDE_USE_CONTINUE="true"
+    LIVE_OUTPUT=false
+    export OSTYPE="linux-gnu"
+    unset OS
+
+    echo "Implement the task" > "$RALPH_DIR/PROMPT.md"
+    PROMPT_FILE="$RALPH_DIR/PROMPT.md"
+
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    PLATFORM_DRIVER="cursor"
+    load_platform_driver
+
+    run execute_claude_code 1
+    assert_success
+
+    run grep -- "--resume" "$RALPH_DIR/cursor_args.log"
+    assert_failure
+}
+
+@test "prepare_live_command_args converts Claude JSON mode into stream-json" {
+    echo "Implement auth" > "$RALPH_DIR/PROMPT.md"
+    PROMPT_FILE="$RALPH_DIR/PROMPT.md"
+
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    PLATFORM_DRIVER="claude-code"
+    load_platform_driver
+    build_claude_command "$PROMPT_FILE" "" ""
+
+    prepare_live_command_args
+    local args_str="${LIVE_CMD_ARGS[*]}"
+    [[ "$args_str" =~ "--output-format stream-json" ]]
+    [[ "$args_str" =~ "--verbose" ]]
+    [[ "$args_str" =~ "--include-partial-messages" ]]
+
+    run get_live_stream_filter
+    assert_success
+    assert_output --partial "stream_event"
+}
+
+@test "prepare_live_command_args keeps Codex JSONL command unchanged" {
+    echo "Implement auth" > "$RALPH_DIR/PROMPT.md"
+    PROMPT_FILE="$RALPH_DIR/PROMPT.md"
+
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    PLATFORM_DRIVER="codex"
+    load_platform_driver
+    build_claude_command "$PROMPT_FILE" "" ""
+
+    prepare_live_command_args
+    local args_str="${LIVE_CMD_ARGS[*]}"
+    [[ "$args_str" =~ "--json" ]]
+    [[ ! "$args_str" =~ "--include-partial-messages" ]]
+
+    run get_live_stream_filter
+    assert_success
+    assert_output --partial "item.completed"
+}
+
+@test "supports_live_output rejects drivers without structured streams" {
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    PLATFORM_DRIVER="copilot"
+    load_platform_driver
+
+    run supports_live_output
+    assert_failure
 }

@@ -5,7 +5,7 @@
 # Known limitations:
 # - CLI is in beta — binary name and flags may change
 # - NDJSON stream format assumes {type: "text", content: "..."} events
-# - Session ID capture from output not yet validated
+# - Session continuity is disabled until Cursor exposes a stable capturable session ID
 
 driver_name() {
     echo "cursor"
@@ -85,11 +85,6 @@ driver_build_command() {
     # NDJSON streaming output
     CLAUDE_CMD_ARGS+=("--output-format" "stream-json")
 
-    # Session resume — gated on CLAUDE_USE_CONTINUE to respect --no-continue flag
-    if [[ "$CLAUDE_USE_CONTINUE" == "true" && -n "$session_id" ]]; then
-        CLAUDE_CMD_ARGS+=("--resume" "$session_id")
-    fi
-
     # Build prompt with context prepended
     local prompt_content
     if driver_running_on_windows; then
@@ -107,7 +102,15 @@ $prompt_content"
 }
 
 driver_supports_sessions() {
-    return 0  # true — Cursor supports --resume
+    return 1  # false — session IDs are not capturable from current NDJSON output
+}
+
+driver_supports_live_output() {
+    return 0  # true
+}
+
+driver_prepare_live_command() {
+    LIVE_CMD_ARGS=("${CLAUDE_CMD_ARGS[@]}")
 }
 
 # Cursor CLI outputs NDJSON events

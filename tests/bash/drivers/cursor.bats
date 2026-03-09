@@ -178,7 +178,7 @@ teardown() {
     [[ "$last_arg" =~ "Implement auth module" ]]
 }
 
-@test "driver_build_command resumes session when CLAUDE_USE_CONTINUE is true" {
+@test "driver_build_command ignores session IDs because resume is not supported" {
     local prompt_file="$RALPH_DIR/prompt.md"
     echo "Test prompt" > "$prompt_file"
 
@@ -186,7 +186,7 @@ teardown() {
     driver_build_command "$prompt_file" "" "session-cursor-456"
 
     local args_str="${CLAUDE_CMD_ARGS[*]}"
-    [[ "$args_str" =~ "--resume session-cursor-456" ]]
+    [[ ! "$args_str" =~ "--resume" ]]
 }
 
 @test "driver_build_command skips session when CLAUDE_USE_CONTINUE is false" {
@@ -256,9 +256,9 @@ teardown() {
 # driver_supports_sessions
 # ===========================================================================
 
-@test "driver_supports_sessions returns success" {
+@test "driver_supports_sessions returns false" {
     run driver_supports_sessions
-    assert_success
+    assert_failure
 }
 
 # ===========================================================================

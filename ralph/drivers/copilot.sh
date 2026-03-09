@@ -82,6 +82,11 @@ driver_supports_sessions() {
     return 1  # false — session IDs not capturable from -p output
 }
 
+# Copilot CLI does not expose structured live output for jq streaming.
+driver_supports_live_output() {
+    return 1  # false
+}
+
 # Copilot CLI outputs plain text only (no JSON streaming).
 # Passthrough filter — no transformation needed.
 driver_stream_filter() {

@@ -26,6 +26,16 @@ teardown() {
     assert_output "json"
 }
 
+@test "detect_output_format identifies Codex JSONL" {
+    run detect_output_format "$FIXTURES_DIR/codex_jsonl_response.jsonl"
+    assert_output "json"
+}
+
+@test "detect_output_format treats unsupported NDJSON as text" {
+    run detect_output_format "$FIXTURES_DIR/cursor_ndjson_response.jsonl"
+    assert_output "text"
+}
+
 @test "detect_output_format identifies text file" {
     run detect_output_format "$FIXTURES_DIR/text_response_complete.txt"
     assert_output "text"
@@ -175,6 +185,38 @@ EOF
 }
 
 # ===========================================================================
+# parse_json_response — Codex JSONL format
+# ===========================================================================
+
+@test "parse_json_response parses Codex JSONL agent message with RALPH_STATUS" {
+    _skip_if_xargs_broken
+    local result="$RALPH_DIR/result.json"
+    parse_json_response "$FIXTURES_DIR/codex_jsonl_response.jsonl" "$result"
+
+    run jq -r '.exit_signal' "$result"
+    assert_output "true"
+
+    run jq -r '.session_id' "$result"
+    assert_output "codex-thread-123"
+}
+
+@test "parse_json_response joins Codex JSONL content blocks into summary" {
+    local result="$RALPH_DIR/result.json"
+    parse_json_response "$FIXTURES_DIR/codex_jsonl_completion.jsonl" "$result"
+
+    run jq -r '.summary' "$result"
+    assert_output --partial "All tasks complete and ready for review."
+
+    run jq -r '.session_id' "$result"
+    assert_output "codex-thread-456"
+}
+
+@test "parse_json_response fails for unsupported NDJSON formats" {
+    run parse_json_response "$FIXTURES_DIR/cursor_ndjson_response.jsonl" "$RALPH_DIR/result.json"
+    assert_failure
+}
+
+# ===========================================================================
 # parse_json_response — permission denials
 # ===========================================================================
 
@@ -236,6 +278,56 @@ EOF
 
     run jq -r '.analysis.has_completion_signal' "$analysis"
     assert_output "true"
+}
+
+@test "analyze_response infers completion from Codex JSONL agent text" {
+    local analysis="$RALPH_DIR/.response_analysis"
+
+    run analyze_response "$FIXTURES_DIR/codex_jsonl_completion.jsonl" 6 "$analysis"
+    assert_success
+
+    run jq -r '.output_format' "$analysis"
+    assert_output "json"
+
+    run jq -r '.analysis.exit_signal' "$analysis"
+    assert_output "true"
+
+    run jq -r '.analysis.has_completion_signal' "$analysis"
+    assert_output "true"
+}
+
+@test "analyze_response falls back to text for unsupported NDJSON formats" {
+    local analysis="$RALPH_DIR/.response_analysis"
+
+    run analyze_response "$FIXTURES_DIR/cursor_ndjson_response.jsonl" 6 "$analysis"
+    assert_success
+
+    run jq -r '.output_format' "$analysis"
+    assert_output "text"
+
+    run jq -r '.analysis.exit_signal' "$analysis"
+    assert_output "false"
+}
+
+@test "analyze_response does not abort on Codex JSONL without agent message" {
+    local analysis="$RALPH_DIR/.response_analysis"
+
+    run analyze_response "$FIXTURES_DIR/codex_jsonl_no_agent_message.jsonl" 7 "$analysis"
+    assert_success
+
+    assert [ -f "$analysis" ]
+
+    run jq -r '.analysis.exit_signal' "$analysis"
+    assert_output "false"
+}
+
+@test "parse_json_response does not mark structured EXIT_SIGNAL false responses as completion signals" {
+    _skip_if_xargs_broken
+    local result="$RALPH_DIR/result.json"
+    parse_json_response "$FIXTURES_DIR/cli_object_exit_false.json" "$result"
+
+    run jq -r '.has_completion_signal' "$result"
+    assert_output "false"
 }
 
 # ===========================================================================
@@ -362,6 +454,9 @@ EOF
     # Explicit EXIT_SIGNAL: false overrides heuristic completion detection
     run jq -r '.analysis.exit_signal' "$analysis"
     assert_output "false"
+
+    run jq -r '.analysis.has_completion_signal' "$analysis"
+    assert_output "false"
 }
 
 @test "analyze_response tracks output length" {
@@ -403,6 +498,14 @@ EOF
 
     run get_last_session_id
     assert_output "session-roundtrip-42"
+}
+
+@test "get_last_session_id reads legacy JSON session files" {
+    jq -n --arg sid "legacy-session-99" --arg ts "$(_minutes_ago_iso 5)" \
+        '{session_id: $sid, timestamp: $ts}' > "$SESSION_FILE"
+
+    run get_last_session_id
+    assert_output "legacy-session-99"
 }
 
 @test "get_last_session_id returns empty when no session file" {
@@ -463,6 +566,17 @@ EOF
     run should_resume_session
     assert_output "true"
     assert_success
+}
+
+@test "analyze_response persists raw session ID for loop continuity" {
+    local analysis="$RALPH_DIR/.response_analysis"
+
+    run analyze_response "$FIXTURES_DIR/codex_jsonl_response.jsonl" 8 "$analysis"
+    assert_success
+
+    local saved
+    saved=$(cat "$SESSION_FILE")
+    assert_equal "$saved" "codex-thread-123"
 }
 
 # ===========================================================================

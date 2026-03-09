@@ -27,8 +27,158 @@ NO_WORK_PATTERNS=("nothing to do" "no changes" "already implemented" "up to date
 # JSON OUTPUT FORMAT DETECTION AND PARSING
 # =============================================================================
 
+# Windows jq.exe handles workspace-relative paths more reliably than POSIX
+# absolute temp paths like /tmp/... when invoked from Git Bash.
+create_jq_temp_file() {
+    mktemp "./.response_analyzer.XXXXXX"
+}
+
+# Count parseable top-level JSON documents in an output file.
+count_json_documents() {
+    local output_file=$1
+
+    if [[ ! -f "$output_file" ]] || [[ ! -s "$output_file" ]]; then
+        echo "0"
+        return 1
+    fi
+
+    jq -n -j 'reduce inputs as $item (0; . + 1)' < "$output_file" 2>/dev/null
+}
+
+# Normalize a Claude CLI array response into a single object file.
+normalize_cli_array_response() {
+    local output_file=$1
+    local normalized_file=$2
+
+    # Extract the "result" type message from the array (usually the last entry)
+    # This contains: result, session_id, is_error, duration_ms, etc.
+    local result_obj=$(jq '[.[] | select(.type == "result")] | .[-1] // {}' "$output_file" 2>/dev/null)
+
+    # Guard against empty result_obj if jq fails (review fix: Macroscope)
+    [[ -z "$result_obj" ]] && result_obj="{}"
+
+    # Extract session_id from init message as fallback
+    local init_session_id=$(jq -r '.[] | select(.type == "system" and .subtype == "init") | .session_id // empty' "$output_file" 2>/dev/null | head -1 | tr -d '\r')
+
+    # Prioritize result object's own session_id, then fall back to init message (review fix: CodeRabbit)
+    # This prevents session ID loss when arrays lack an init message with session_id
+    local effective_session_id
+    effective_session_id=$(echo "$result_obj" | jq -r -j '.sessionId // .session_id // empty' 2>/dev/null)
+    if [[ -z "$effective_session_id" || "$effective_session_id" == "null" ]]; then
+        effective_session_id="$init_session_id"
+    fi
+
+    # Build normalized object merging result with effective session_id
+    if [[ -n "$effective_session_id" && "$effective_session_id" != "null" ]]; then
+        echo "$result_obj" | jq --arg sid "$effective_session_id" '. + {sessionId: $sid} | del(.session_id)' > "$normalized_file"
+    else
+        echo "$result_obj" | jq 'del(.session_id)' > "$normalized_file"
+    fi
+}
+
+# Normalize Codex JSONL event output into the object shape expected downstream.
+normalize_codex_jsonl_response() {
+    local output_file=$1
+    local normalized_file=$2
+
+    jq -rs '
+        def agent_text($item):
+            $item.text // (
+                [($item.content // [])[]? | select(.type == "output_text") | .text]
+                | join("\n")
+            ) // "";
+
+        (map(select(.type == "item.completed" and .item.type == "agent_message")) | last | .item // {}) as $agent_message
+        | {
+            result: agent_text($agent_message),
+            sessionId: (map(select(.type == "thread.started") | .thread_id // empty) | first // ""),
+            metadata: {}
+        }
+    ' "$output_file" > "$normalized_file"
+}
+
+# Detect whether a multi-document stream matches Codex JSONL events.
+is_codex_jsonl_output() {
+    local output_file=$1
+
+    jq -n -j '
+        reduce inputs as $item (
+            false;
+            . or (
+                $item.type == "thread.started" or
+                ($item.type == "item.completed" and ($item.item.type? != null))
+            )
+        )
+    ' < "$output_file" 2>/dev/null
+}
+
+# Normalize structured output to a single object when downstream parsing expects one.
+normalize_json_output() {
+    local output_file=$1
+    local normalized_file=$2
+    local json_document_count
+
+    json_document_count=$(count_json_documents "$output_file") || return 1
+
+    if [[ "$json_document_count" -gt 1 ]]; then
+        local is_codex_jsonl
+        is_codex_jsonl=$(is_codex_jsonl_output "$output_file") || return 1
+
+        if [[ "$is_codex_jsonl" == "true" ]]; then
+            normalize_codex_jsonl_response "$output_file" "$normalized_file"
+            return $?
+        fi
+
+        return 1
+    fi
+
+    if jq -e 'type == "array"' "$output_file" >/dev/null 2>&1; then
+        normalize_cli_array_response "$output_file" "$normalized_file"
+        return $?
+    fi
+
+    return 1
+}
+
+# Extract persisted session ID from any supported structured output.
+extract_session_id_from_output() {
+    local output_file=$1
+    local normalized_file=""
+    local session_id=""
+    local json_document_count
+
+    if [[ ! -f "$output_file" ]] || [[ ! -s "$output_file" ]]; then
+        echo ""
+        return 1
+    fi
+
+    json_document_count=$(count_json_documents "$output_file") || {
+        echo ""
+        return 1
+    }
+
+    if [[ "$json_document_count" -gt 1 ]] || jq -e 'type == "array"' "$output_file" >/dev/null 2>&1; then
+        normalized_file=$(create_jq_temp_file)
+        if ! normalize_json_output "$output_file" "$normalized_file"; then
+            rm -f "$normalized_file"
+            echo ""
+            return 1
+        fi
+        output_file="$normalized_file"
+    fi
+
+    session_id=$(jq -r '.sessionId // .metadata.session_id // .session_id // empty' "$output_file" 2>/dev/null | head -1 | tr -d '\r')
+
+    if [[ -n "$normalized_file" && -f "$normalized_file" ]]; then
+        rm -f "$normalized_file"
+    fi
+
+    echo "$session_id"
+    [[ -n "$session_id" && "$session_id" != "null" ]]
+}
+
 # Detect output format (json or text)
-# Returns: "json" if valid JSON, "text" otherwise
+# Returns: "json" for single-document JSON and newline-delimited JSON, "text" otherwise
 detect_output_format() {
     local output_file=$1
 
@@ -45,24 +195,48 @@ detect_output_format() {
         return
     fi
 
-    # Validate as JSON using jq
-    if jq empty "$output_file" 2>/dev/null; then
-        echo "json"
-    else
+    local json_document_count
+    json_document_count=$(count_json_documents "$output_file") || {
         echo "text"
+        return
+    }
+
+    if [[ "$json_document_count" -eq 1 ]]; then
+        echo "json"
+        return
     fi
+
+    if [[ "$json_document_count" -gt 1 ]]; then
+        local is_codex_jsonl
+        is_codex_jsonl=$(is_codex_jsonl_output "$output_file") || {
+            echo "text"
+            return
+        }
+
+        if [[ "$is_codex_jsonl" == "true" ]]; then
+            echo "json"
+        else
+            echo "text"
+        fi
+        return
+    fi
+
+    echo "text"
 }
 
 # Parse JSON response and extract structured fields
 # Creates .ralph/.json_parse_result with normalized analysis data
-# Supports THREE JSON formats:
+# Supports FOUR JSON formats:
 # 1. Flat format: { status, exit_signal, work_type, files_modified, ... }
 # 2. Claude CLI object format: { result, sessionId, metadata: { files_changed, has_errors, completion_status, ... } }
 # 3. Claude CLI array format: [ {type: "system", ...}, {type: "assistant", ...}, {type: "result", ...} ]
+# 4. Codex JSONL format: {"type":"thread.started",...}\n{"type":"item.completed","item":{...}}
 parse_json_response() {
     local output_file=$1
     local result_file="${2:-$RALPH_DIR/.json_parse_result}"
     local normalized_file=""
+    local json_document_count=""
+    local response_shape="object"
 
     if [[ ! -f "$output_file" ]]; then
         echo "ERROR: Output file not found: $output_file" >&2
@@ -70,71 +244,59 @@ parse_json_response() {
     fi
 
     # Validate JSON first
-    if ! jq empty "$output_file" 2>/dev/null; then
+    json_document_count=$(count_json_documents "$output_file") || {
         echo "ERROR: Invalid JSON in output file" >&2
         return 1
-    fi
+    }
 
-    # Check if JSON is an array (Claude CLI array format)
-    # Claude CLI outputs: [{type: "system", ...}, {type: "assistant", ...}, {type: "result", ...}]
-    if jq -e 'type == "array"' "$output_file" >/dev/null 2>&1; then
-        normalized_file=$(mktemp)
-
-        # Extract the "result" type message from the array (usually the last entry)
-        # This contains: result, session_id, is_error, duration_ms, etc.
-        local result_obj=$(jq '[.[] | select(.type == "result")] | .[-1] // {}' "$output_file" 2>/dev/null)
-
-        # Guard against empty result_obj if jq fails (review fix: Macroscope)
-        [[ -z "$result_obj" ]] && result_obj="{}"
-
-        # Extract session_id from init message as fallback
-        local init_session_id=$(jq -r '.[] | select(.type == "system" and .subtype == "init") | .session_id // empty' "$output_file" 2>/dev/null | head -1)
-
-        # Prioritize result object's own session_id, then fall back to init message (review fix: CodeRabbit)
-        # This prevents session ID loss when arrays lack an init message with session_id
-        local effective_session_id
-        effective_session_id=$(echo "$result_obj" | jq -r '.sessionId // .session_id // empty' 2>/dev/null)
-        if [[ -z "$effective_session_id" || "$effective_session_id" == "null" ]]; then
-            effective_session_id="$init_session_id"
-        fi
-
-        # Build normalized object merging result with effective session_id
-        if [[ -n "$effective_session_id" && "$effective_session_id" != "null" ]]; then
-            echo "$result_obj" | jq --arg sid "$effective_session_id" '. + {sessionId: $sid} | del(.session_id)' > "$normalized_file"
+    # Normalize multi-document JSONL and array responses to a single object.
+    if [[ "$json_document_count" -gt 1 ]] || jq -e 'type == "array"' "$output_file" >/dev/null 2>&1; then
+        if [[ "$json_document_count" -gt 1 ]]; then
+            response_shape="jsonl"
         else
-            echo "$result_obj" | jq 'del(.session_id)' > "$normalized_file"
+            response_shape="array"
+        fi
+        normalized_file=$(create_jq_temp_file)
+        if ! normalize_json_output "$output_file" "$normalized_file"; then
+            rm -f "$normalized_file"
+            echo "ERROR: Failed to normalize JSON output" >&2
+            return 1
         fi
 
         # Use normalized file for subsequent parsing
         output_file="$normalized_file"
+
+        if [[ "$response_shape" == "jsonl" ]]; then
+            response_shape="codex_jsonl"
+        fi
     fi
 
     # Detect JSON format by checking for Claude CLI fields
-    local has_result_field=$(jq -r 'has("result")' "$output_file" 2>/dev/null)
+    local has_result_field=$(jq -r -j 'has("result")' "$output_file" 2>/dev/null)
 
     # Extract fields - support both flat format and Claude CLI format
     # Priority: Claude CLI fields first, then flat format fields
 
     # Status: from flat format OR derived from metadata.completion_status
-    local status=$(jq -r '.status // "UNKNOWN"' "$output_file" 2>/dev/null)
-    local completion_status=$(jq -r '.metadata.completion_status // ""' "$output_file" 2>/dev/null)
+    local status=$(jq -r -j '.status // "UNKNOWN"' "$output_file" 2>/dev/null)
+    local completion_status=$(jq -r -j '.metadata.completion_status // ""' "$output_file" 2>/dev/null)
     if [[ "$completion_status" == "complete" || "$completion_status" == "COMPLETE" ]]; then
         status="COMPLETE"
     fi
 
     # Exit signal: from flat format OR derived from completion_status
     # Track whether EXIT_SIGNAL was explicitly provided (vs inferred from STATUS)
-    local exit_signal=$(jq -r '.exit_signal // false' "$output_file" 2>/dev/null)
-    local explicit_exit_signal_found=$(jq -r 'has("exit_signal")' "$output_file" 2>/dev/null)
+    local exit_signal=$(jq -r -j '.exit_signal // false' "$output_file" 2>/dev/null)
+    local explicit_exit_signal_found=$(jq -r -j 'has("exit_signal")' "$output_file" 2>/dev/null)
 
     # Bug #1 Fix: If exit_signal is still false, check for RALPH_STATUS block in .result field
     # Claude CLI JSON format embeds the RALPH_STATUS block within the .result text field
     if [[ "$exit_signal" == "false" && "$has_result_field" == "true" ]]; then
-        local result_text=$(jq -r '.result // ""' "$output_file" 2>/dev/null)
+        local result_text=$(jq -r -j '.result // ""' "$output_file" 2>/dev/null)
         if [[ -n "$result_text" ]] && echo "$result_text" | grep -q -- "---RALPH_STATUS---"; then
             # Extract EXIT_SIGNAL value from RALPH_STATUS block within result text
             local embedded_exit_sig
-            embedded_exit_sig=$(echo "$result_text" | grep "EXIT_SIGNAL:" | cut -d: -f2 | xargs)
+            embedded_exit_sig=$(echo "$result_text" | grep "EXIT_SIGNAL:" | cut -d: -f2 | tr -d '\r' | xargs)
             if [[ -n "$embedded_exit_sig" ]]; then
                 # Explicit EXIT_SIGNAL found in RALPH_STATUS block
                 explicit_exit_signal_found="true"
@@ -149,7 +311,7 @@ parse_json_response() {
             # Also check STATUS field as fallback ONLY when EXIT_SIGNAL was not specified
             # This respects explicit EXIT_SIGNAL: false which means "task complete, continue working"
             local embedded_status
-            embedded_status=$(echo "$result_text" | grep "STATUS:" | cut -d: -f2 | xargs)
+            embedded_status=$(echo "$result_text" | grep "STATUS:" | cut -d: -f2 | tr -d '\r' | xargs)
             if [[ "$embedded_status" == "COMPLETE" && "$explicit_exit_signal_found" != "true" ]]; then
                 # STATUS: COMPLETE without any EXIT_SIGNAL field implies completion
                 exit_signal="true"
@@ -159,40 +321,40 @@ parse_json_response() {
     fi
 
     # Work type: from flat format
-    local work_type=$(jq -r '.work_type // "UNKNOWN"' "$output_file" 2>/dev/null)
+    local work_type=$(jq -r -j '.work_type // "UNKNOWN"' "$output_file" 2>/dev/null)
 
     # Files modified: from flat format OR from metadata.files_changed
-    local files_modified=$(jq -r '.metadata.files_changed // .files_modified // 0' "$output_file" 2>/dev/null)
+    local files_modified=$(jq -r -j '.metadata.files_changed // .files_modified // 0' "$output_file" 2>/dev/null)
 
     # Error count: from flat format OR derived from metadata.has_errors
     # Note: When only has_errors=true is present (without explicit error_count),
     # we set error_count=1 as a minimum. This is defensive programming since
     # the stuck detection threshold is >5 errors, so 1 error won't trigger it.
     # Actual error count may be higher, but precise count isn't critical for our logic.
-    local error_count=$(jq -r '.error_count // 0' "$output_file" 2>/dev/null)
-    local has_errors=$(jq -r '.metadata.has_errors // false' "$output_file" 2>/dev/null)
+    local error_count=$(jq -r -j '.error_count // 0' "$output_file" 2>/dev/null)
+    local has_errors=$(jq -r -j '.metadata.has_errors // false' "$output_file" 2>/dev/null)
     if [[ "$has_errors" == "true" && "$error_count" == "0" ]]; then
         error_count=1  # At least one error if has_errors is true
     fi
 
     # Summary: from flat format OR from result field (Claude CLI format)
-    local summary=$(jq -r '.result // .summary // ""' "$output_file" 2>/dev/null)
+    local summary=$(jq -r -j '.result // .summary // ""' "$output_file" 2>/dev/null)
 
     # Session ID: from Claude CLI format (sessionId) OR from metadata.session_id
-    local session_id=$(jq -r '.sessionId // .metadata.session_id // ""' "$output_file" 2>/dev/null)
+    local session_id=$(jq -r -j '.sessionId // .metadata.session_id // ""' "$output_file" 2>/dev/null)
 
     # Loop number: from metadata
-    local loop_number=$(jq -r '.metadata.loop_number // .loop_number // 0' "$output_file" 2>/dev/null)
+    local loop_number=$(jq -r -j '.metadata.loop_number // .loop_number // 0' "$output_file" 2>/dev/null)
 
     # Confidence: from flat format
-    local confidence=$(jq -r '.confidence // 0' "$output_file" 2>/dev/null)
+    local confidence=$(jq -r -j '.confidence // 0' "$output_file" 2>/dev/null)
 
     # Progress indicators: from Claude CLI metadata (optional)
-    local progress_count=$(jq -r '.metadata.progress_indicators | if . then length else 0 end' "$output_file" 2>/dev/null)
+    local progress_count=$(jq -r -j '.metadata.progress_indicators | if . then length else 0 end' "$output_file" 2>/dev/null)
 
     # Permission denials: from Claude Code output (Issue #101)
     # When Claude Code is denied permission to run commands, it outputs a permission_denials array
-    local permission_denial_count=$(jq -r '.permission_denials | if . then length else 0 end' "$output_file" 2>/dev/null)
+    local permission_denial_count=$(jq -r -j '.permission_denials | if . then length else 0 end' "$output_file" 2>/dev/null)
     permission_denial_count=$((permission_denial_count + 0))  # Ensure integer
 
     local has_permission_denials="false"
@@ -206,7 +368,27 @@ parse_json_response() {
     # while Bash denial shows "Bash(git commit -m ...)" with truncated command
     local denied_commands_json="[]"
     if [[ $permission_denial_count -gt 0 ]]; then
-        denied_commands_json=$(jq -r '[.permission_denials[] | if .tool_name == "Bash" then "Bash(\(.tool_input.command // "?" | split("\n")[0] | .[0:60]))" else .tool_name // "unknown" end]' "$output_file" 2>/dev/null || echo "[]")
+        denied_commands_json=$(jq -r -j '[.permission_denials[] | if .tool_name == "Bash" then "Bash(\(.tool_input.command // "?" | split("\n")[0] | .[0:60]))" else .tool_name // "unknown" end]' "$output_file" 2>/dev/null || echo "[]")
+    fi
+
+    # Apply completion heuristics to normalized summary text when explicit structured
+    # completion markers are absent. This keeps JSONL analysis aligned with text mode.
+    local summary_has_completion_keyword="false"
+    local summary_has_no_work_pattern="false"
+    if [[ "$response_shape" == "codex_jsonl" && "$explicit_exit_signal_found" != "true" && -n "$summary" ]]; then
+        for keyword in "${COMPLETION_KEYWORDS[@]}"; do
+            if echo "$summary" | grep -qi "$keyword"; then
+                summary_has_completion_keyword="true"
+                break
+            fi
+        done
+
+        for pattern in "${NO_WORK_PATTERNS[@]}"; do
+            if echo "$summary" | grep -qi "$pattern"; then
+                summary_has_no_work_pattern="true"
+                break
+            fi
+        done
     fi
 
     # Normalize values
@@ -215,7 +397,7 @@ parse_json_response() {
     if [[ "$explicit_exit_signal_found" == "true" ]]; then
         # Respect explicit EXIT_SIGNAL value (already set above)
         [[ "$exit_signal" == "true" ]] && exit_signal="true" || exit_signal="false"
-    elif [[ "$exit_signal" == "true" || "$status" == "COMPLETE" || "$completion_status" == "complete" || "$completion_status" == "COMPLETE" ]]; then
+    elif [[ "$exit_signal" == "true" || "$status" == "COMPLETE" || "$completion_status" == "complete" || "$completion_status" == "COMPLETE" || "$summary_has_completion_keyword" == "true" || "$summary_has_no_work_pattern" == "true" ]]; then
         exit_signal="true"
     else
         exit_signal="false"
@@ -242,7 +424,11 @@ parse_json_response() {
 
     # Calculate has_completion_signal
     local has_completion_signal="false"
-    if [[ "$status" == "COMPLETE" || "$exit_signal" == "true" ]]; then
+    if [[ "$explicit_exit_signal_found" == "true" ]]; then
+        if [[ "$exit_signal" == "true" ]]; then
+            has_completion_signal="true"
+        fi
+    elif [[ "$status" == "COMPLETE" || "$exit_signal" == "true" || "$summary_has_completion_keyword" == "true" || "$summary_has_no_work_pattern" == "true" ]]; then
         has_completion_signal="true"
     fi
 
@@ -327,24 +513,26 @@ analyze_response() {
 
     # Detect output format and try JSON parsing first
     local output_format=$(detect_output_format "$output_file")
+    local json_parse_result_file=""
 
     if [[ "$output_format" == "json" ]]; then
         # Try JSON parsing
-        if parse_json_response "$output_file" "$RALPH_DIR/.json_parse_result" 2>/dev/null; then
+        json_parse_result_file=$(create_jq_temp_file)
+        if parse_json_response "$output_file" "$json_parse_result_file" 2>/dev/null; then
             # Extract values from JSON parse result
-            has_completion_signal=$(jq -r '.has_completion_signal' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "false")
-            exit_signal=$(jq -r '.exit_signal' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "false")
-            is_test_only=$(jq -r '.is_test_only' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "false")
-            is_stuck=$(jq -r '.is_stuck' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "false")
-            work_summary=$(jq -r '.summary' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "")
-            files_modified=$(jq -r '.files_modified' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "0")
-            local json_confidence=$(jq -r '.confidence' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "0")
-            local session_id=$(jq -r '.session_id' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "")
+            has_completion_signal=$(jq -r -j '.has_completion_signal' "$json_parse_result_file" 2>/dev/null || echo "false")
+            exit_signal=$(jq -r -j '.exit_signal' "$json_parse_result_file" 2>/dev/null || echo "false")
+            is_test_only=$(jq -r -j '.is_test_only' "$json_parse_result_file" 2>/dev/null || echo "false")
+            is_stuck=$(jq -r -j '.is_stuck' "$json_parse_result_file" 2>/dev/null || echo "false")
+            work_summary=$(jq -r -j '.summary' "$json_parse_result_file" 2>/dev/null || echo "")
+            files_modified=$(jq -r -j '.files_modified' "$json_parse_result_file" 2>/dev/null || echo "0")
+            local json_confidence=$(jq -r -j '.confidence' "$json_parse_result_file" 2>/dev/null || echo "0")
+            local session_id=$(jq -r -j '.session_id' "$json_parse_result_file" 2>/dev/null || echo "")
 
             # Extract permission denial fields (Issue #101)
-            local has_permission_denials=$(jq -r '.has_permission_denials' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "false")
-            local permission_denial_count=$(jq -r '.permission_denial_count' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "0")
-            local denied_commands_json=$(jq -r '.denied_commands' $RALPH_DIR/.json_parse_result 2>/dev/null || echo "[]")
+            local has_permission_denials=$(jq -r -j '.has_permission_denials' "$json_parse_result_file" 2>/dev/null || echo "false")
+            local permission_denial_count=$(jq -r -j '.permission_denial_count' "$json_parse_result_file" 2>/dev/null || echo "0")
+            local denied_commands_json=$(jq -r -j '.denied_commands' "$json_parse_result_file" 2>/dev/null || echo "[]")
 
             # Persist session ID if present (for session continuity across loop iterations)
             if [[ -n "$session_id" && "$session_id" != "null" ]]; then
@@ -435,9 +623,10 @@ analyze_response() {
                         denied_commands: $denied_commands
                     }
                 }' > "$analysis_result_file"
-            rm -f "$RALPH_DIR/.json_parse_result"
+            rm -f "$json_parse_result_file"
             return 0
         fi
+        rm -f "$json_parse_result_file"
         # If JSON parsing failed, fall through to text parsing
     fi
 
@@ -450,8 +639,8 @@ analyze_response() {
     # 1. Check for explicit structured output (if Claude follows schema)
     if grep -q -- "---RALPH_STATUS---" "$output_file"; then
         # Parse structured output
-        local status=$(grep "STATUS:" "$output_file" | cut -d: -f2 | xargs)
-        local exit_sig=$(grep "EXIT_SIGNAL:" "$output_file" | cut -d: -f2 | xargs)
+        local status=$(grep "STATUS:" "$output_file" | cut -d: -f2 | tr -d '\r' | xargs)
+        local exit_sig=$(grep "EXIT_SIGNAL:" "$output_file" | cut -d: -f2 | tr -d '\r' | xargs)
 
         # If EXIT_SIGNAL is explicitly provided, respect it
         if [[ -n "$exit_sig" ]]; then
@@ -588,6 +777,12 @@ analyze_response() {
         fi
     fi
 
+    # Explicit EXIT_SIGNAL=false means "continue working", so completion
+    # heuristics must not register a done signal.
+    if [[ "$explicit_exit_signal_found" == "true" && "$exit_signal" == "false" ]]; then
+        has_completion_signal=false
+    fi
+
     # 9. Determine exit signal based on confidence (heuristic)
     # IMPORTANT: Only apply heuristics if no explicit EXIT_SIGNAL was found in RALPH_STATUS
     # Claude's explicit intent takes precedence over natural language pattern matching
@@ -650,10 +845,10 @@ update_exit_signals() {
     fi
 
     # Read analysis results
-    local is_test_only=$(jq -r '.analysis.is_test_only' "$analysis_file")
-    local has_completion_signal=$(jq -r '.analysis.has_completion_signal' "$analysis_file")
-    local loop_number=$(jq -r '.loop_number' "$analysis_file")
-    local has_progress=$(jq -r '.analysis.has_progress' "$analysis_file")
+    local is_test_only=$(jq -r -j '.analysis.is_test_only' "$analysis_file")
+    local has_completion_signal=$(jq -r -j '.analysis.has_completion_signal' "$analysis_file")
+    local loop_number=$(jq -r -j '.loop_number' "$analysis_file")
+    local has_progress=$(jq -r -j '.analysis.has_progress' "$analysis_file")
 
     # Read current exit signals
     local signals=$(cat "$exit_signals_file" 2>/dev/null || echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": []}')
@@ -677,7 +872,7 @@ update_exit_signals() {
     # Note: Previously used confidence >= 60, but JSON mode always has confidence >= 70
     # due to deterministic scoring (+50 for JSON format, +20 for result field).
     # This caused premature exits after 5 loops. Now we respect Claude's explicit intent.
-    local exit_signal=$(jq -r '.analysis.exit_signal // false' "$analysis_file")
+    local exit_signal=$(jq -r -j '.analysis.exit_signal // false' "$analysis_file")
     if [[ "$exit_signal" == "true" ]]; then
         signals=$(echo "$signals" | jq ".completion_indicators += [$loop_number]")
     fi
@@ -701,12 +896,12 @@ log_analysis_summary() {
         return 1
     fi
 
-    local loop=$(jq -r '.loop_number' "$analysis_file")
-    local exit_sig=$(jq -r '.analysis.exit_signal' "$analysis_file")
-    local confidence=$(jq -r '.analysis.confidence_score' "$analysis_file")
-    local test_only=$(jq -r '.analysis.is_test_only' "$analysis_file")
-    local files_changed=$(jq -r '.analysis.files_modified' "$analysis_file")
-    local summary=$(jq -r '.analysis.work_summary' "$analysis_file")
+    local loop=$(jq -r -j '.loop_number' "$analysis_file")
+    local exit_sig=$(jq -r -j '.analysis.exit_signal' "$analysis_file")
+    local confidence=$(jq -r -j '.analysis.confidence_score' "$analysis_file")
+    local test_only=$(jq -r -j '.analysis.is_test_only' "$analysis_file")
+    local files_changed=$(jq -r -j '.analysis.files_modified' "$analysis_file")
+    local summary=$(jq -r -j '.analysis.work_summary' "$analysis_file")
 
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║           Response Analysis - Loop #$loop                 ║${NC}"
@@ -777,6 +972,52 @@ SESSION_FILE="$RALPH_DIR/.claude_session_id"
 # Session expiration time in seconds (24 hours)
 SESSION_EXPIRATION_SECONDS=86400
 
+get_session_file_age_seconds() {
+    if [[ ! -f "$SESSION_FILE" ]]; then
+        echo "-1"
+        return 1
+    fi
+
+    local now
+    now=$(get_epoch_seconds)
+    local file_time=""
+
+    if file_time=$(stat -c %Y "$SESSION_FILE" 2>/dev/null); then
+        :
+    elif file_time=$(stat -f %m "$SESSION_FILE" 2>/dev/null); then
+        :
+    else
+        echo "-1"
+        return 1
+    fi
+
+    echo $((now - file_time))
+}
+
+read_session_id_from_file() {
+    if [[ ! -f "$SESSION_FILE" ]]; then
+        echo ""
+        return 1
+    fi
+
+    local raw_content
+    raw_content=$(cat "$SESSION_FILE" 2>/dev/null)
+    if [[ -z "$raw_content" ]]; then
+        echo ""
+        return 1
+    fi
+
+    local session_id=""
+    if echo "$raw_content" | jq -e . >/dev/null 2>&1; then
+        session_id=$(echo "$raw_content" | jq -r -j '.session_id // .sessionId // ""' 2>/dev/null)
+    else
+        session_id=$(printf '%s' "$raw_content" | tr -d '\r' | head -n 1)
+    fi
+
+    echo "$session_id"
+    [[ -n "$session_id" && "$session_id" != "null" ]]
+}
+
 # Store session ID to file with timestamp
 # Usage: store_session_id "session-uuid-123"
 store_session_id() {
@@ -786,14 +1027,8 @@ store_session_id() {
         return 1
     fi
 
-    # Write session with timestamp using jq for safe JSON construction
-    jq -n \
-        --arg session_id "$session_id" \
-        --arg timestamp "$(get_iso_timestamp)" \
-        '{
-            session_id: $session_id,
-            timestamp: $timestamp
-        }' > "$SESSION_FILE"
+    # Persist the session as a raw ID so the main loop can resume it directly.
+    printf '%s\n' "$session_id" > "$SESSION_FILE"
 
     return 0
 }
@@ -801,14 +1036,7 @@ store_session_id() {
 # Get the last stored session ID
 # Returns: session ID string or empty if not found
 get_last_session_id() {
-    if [[ ! -f "$SESSION_FILE" ]]; then
-        echo ""
-        return 0
-    fi
-
-    # Extract session_id from JSON file
-    local session_id=$(jq -r '.session_id // ""' "$SESSION_FILE" 2>/dev/null)
-    echo "$session_id"
+    read_session_id_from_file || true
     return 0
 }
 
@@ -820,23 +1048,35 @@ should_resume_session() {
         return 1
     fi
 
-    # Get session timestamp
-    local timestamp=$(jq -r '.timestamp // ""' "$SESSION_FILE" 2>/dev/null)
-
-    if [[ -z "$timestamp" ]]; then
+    local session_id
+    session_id=$(read_session_id_from_file) || {
         echo "false"
         return 1
+    }
+
+    # Support legacy JSON session files that still carry a timestamp.
+    local timestamp=""
+    if jq -e . "$SESSION_FILE" >/dev/null 2>&1; then
+        timestamp=$(jq -r -j '.timestamp // ""' "$SESSION_FILE" 2>/dev/null)
     fi
 
-    # Calculate session age using date utilities
-    local now
-    now=$(get_epoch_seconds)
-    local session_time
-    session_time=$(parse_iso_to_epoch "$timestamp")
+    local age=0
+    if [[ -n "$timestamp" && "$timestamp" != "null" ]]; then
+        # Calculate session age using date utilities
+        local now
+        now=$(get_epoch_seconds)
+        local session_time
+        session_time=$(parse_iso_to_epoch "$timestamp")
 
-    # If parse_iso_to_epoch fell back to current epoch, session_time ≈ now → age ≈ 0.
-    # That's a safe default: treat unparseable timestamps as fresh rather than expired.
-    local age=$((now - session_time))
+        # If parse_iso_to_epoch fell back to current epoch, session_time ≈ now → age ≈ 0.
+        # That's a safe default: treat unparseable timestamps as fresh rather than expired.
+        age=$((now - session_time))
+    else
+        age=$(get_session_file_age_seconds) || {
+            echo "false"
+            return 1
+        }
+    fi
 
     # Check if session is still valid (less than expiration time)
     if [[ $age -lt $SESSION_EXPIRATION_SECONDS ]]; then
@@ -850,6 +1090,12 @@ should_resume_session() {
 
 # Export functions for use in ralph_loop.sh
 export -f detect_output_format
+export -f count_json_documents
+export -f normalize_cli_array_response
+export -f normalize_codex_jsonl_response
+export -f is_codex_jsonl_output
+export -f normalize_json_output
+export -f extract_session_id_from_output
 export -f parse_json_response
 export -f analyze_response
 export -f update_exit_signals

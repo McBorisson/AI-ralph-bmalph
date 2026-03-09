@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"codex-thread-789"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"tool_call","name":"shell","arguments":"{\"command\":\"npm test\"}"}}

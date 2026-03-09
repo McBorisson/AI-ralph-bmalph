@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"codex-thread-456"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","content":[{"type":"output_text","text":"All tasks complete and ready for review."},{"type":"output_text","text":"Authentication changes are finished."}]}}

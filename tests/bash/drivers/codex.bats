@@ -160,5 +160,7 @@ teardown() {
 @test "driver_stream_filter returns JSONL event filter" {
     run driver_stream_filter
     assert_success
-    assert_output --partial "message"
+    assert_output --partial "item.completed"
+    assert_output --partial "agent_message"
+    refute_output --partial 'select(.type == "message")'
 }

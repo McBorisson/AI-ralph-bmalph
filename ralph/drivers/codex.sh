@@ -75,7 +75,16 @@ driver_supports_sessions() {
     return 0  # true - Codex supports session resume
 }
 
+# Codex JSONL output is already suitable for live display.
+driver_supports_live_output() {
+    return 0  # true
+}
+
+driver_prepare_live_command() {
+    LIVE_CMD_ARGS=("${CLAUDE_CMD_ARGS[@]}")
+}
+
 # Codex outputs JSONL events
 driver_stream_filter() {
-    echo 'select(.type == "message") | .content // empty'
+    echo 'select(.type == "item.completed" and .item.type == "agent_message") | (.item.text // ([.item.content[]? | select(.type == "output_text") | .text] | join("\n")) // empty)'
 }

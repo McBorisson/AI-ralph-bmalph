@@ -744,7 +744,7 @@ get_session_file_age_seconds() {
     echo "$age_seconds"
 }
 
-# Initialize or resume Claude session (with expiration check)
+# Initialize or resume persisted driver session (with expiration check)
 #
 # Session Expiration Strategy:
 # - Default expiration: 24 hours (configurable via CLAUDE_SESSION_EXPIRY_HOURS)
@@ -786,16 +786,17 @@ init_claude_session() {
         fi
 
         # Session is valid, try to read it
-        local session_id=$(cat "$CLAUDE_SESSION_FILE" 2>/dev/null)
+        local session_id
+        session_id=$(get_last_session_id)
         if [[ -n "$session_id" ]]; then
             local age_hours=$((age_seconds / 3600))
-            log_status "INFO" "Resuming Claude session: ${session_id:0:20}... (${age_hours}h old)"
+            log_status "INFO" "Resuming session: ${session_id:0:20}... (${age_hours}h old)"
             echo "$session_id"
             return 0
         fi
     fi
 
-    log_status "INFO" "Starting new Claude session"
+    log_status "INFO" "Starting new session"
     echo ""
 }
 
@@ -803,12 +804,13 @@ init_claude_session() {
 save_claude_session() {
     local output_file=$1
 
-    # Try to extract session ID from JSON output
+    # Try to extract session ID from structured output
     if [[ -f "$output_file" ]]; then
-        local session_id=$(jq -r '.metadata.session_id // .session_id // empty' "$output_file" 2>/dev/null)
+        local session_id
+        session_id=$(extract_session_id_from_output "$output_file" 2>/dev/null || echo "")
         if [[ -n "$session_id" && "$session_id" != "null" ]]; then
             echo "$session_id" > "$CLAUDE_SESSION_FILE"
-            log_status "INFO" "Saved Claude session: ${session_id:0:20}..."
+            log_status "INFO" "Saved session: ${session_id:0:20}..."
         fi
     fi
 }
@@ -1015,12 +1017,52 @@ update_session_last_used() {
 
 # Global array for Claude command arguments (avoids shell injection)
 declare -a CLAUDE_CMD_ARGS=()
+declare -a LIVE_CMD_ARGS=()
 
 # Build CLI command with platform driver (shell-injection safe)
 # Delegates to the active platform driver's driver_build_command()
 # Populates global CLAUDE_CMD_ARGS array for direct execution
 build_claude_command() {
     driver_build_command "$@"
+}
+
+supports_driver_sessions() {
+    if declare -F driver_supports_sessions >/dev/null; then
+        driver_supports_sessions
+        return $?
+    fi
+
+    return 0
+}
+
+supports_live_output() {
+    if declare -F driver_supports_live_output >/dev/null; then
+        driver_supports_live_output
+        return $?
+    fi
+
+    return 0
+}
+
+prepare_live_command_args() {
+    LIVE_CMD_ARGS=("${CLAUDE_CMD_ARGS[@]}")
+
+    if declare -F driver_prepare_live_command >/dev/null; then
+        driver_prepare_live_command
+        return $?
+    fi
+
+    return 0
+}
+
+get_live_stream_filter() {
+    if declare -F driver_stream_filter >/dev/null; then
+        driver_stream_filter
+        return 0
+    fi
+
+    echo "empty"
+    return 1
 }
 
 # Main execution function
@@ -1054,7 +1096,7 @@ execute_claude_code() {
 
     # Initialize or resume session
     local session_id=""
-    if [[ "$CLAUDE_USE_CONTINUE" == "true" ]]; then
+    if [[ "$CLAUDE_USE_CONTINUE" == "true" ]] && supports_driver_sessions; then
         session_id=$(init_claude_session)
     fi
 
@@ -1094,11 +1136,16 @@ execute_claude_code() {
         # - --continue (session continuity)
         # - -p (prompt content)
 
+        if ! supports_live_output; then
+            log_status "WARN" "$DRIVER_DISPLAY_NAME does not support structured live streaming. Falling back to background mode."
+            LIVE_OUTPUT=false
+        fi
+
         # Check dependencies for live mode
-        if ! command -v jq &> /dev/null; then
+        if [[ "$LIVE_OUTPUT" == "true" ]] && ! command -v jq &> /dev/null; then
             log_status "ERROR" "Live mode requires 'jq' but it's not installed. Falling back to background mode."
             LIVE_OUTPUT=false
-        elif ! command -v stdbuf &> /dev/null; then
+        elif [[ "$LIVE_OUTPUT" == "true" ]] && ! command -v stdbuf &> /dev/null; then
             log_status "ERROR" "Live mode requires 'stdbuf' (from coreutils) but it's not installed. Falling back to background mode."
             LIVE_OUTPUT=false
         fi
@@ -1116,42 +1163,15 @@ execute_claude_code() {
         log_status "INFO" "📺 Live output mode enabled - showing $DRIVER_DISPLAY_NAME streaming..."
         echo -e "${PURPLE}━━━━━━━━━━━━━━━━ ${DRIVER_DISPLAY_NAME} Output ━━━━━━━━━━━━━━━━${NC}"
 
-        # Modify CLAUDE_CMD_ARGS: replace --output-format value with stream-json
-        # and add streaming-specific flags
-        local -a LIVE_CMD_ARGS=()
-        local skip_next=false
-        for arg in "${CLAUDE_CMD_ARGS[@]}"; do
-            if [[ "$skip_next" == "true" ]]; then
-                # Replace "json" with "stream-json" for output format
-                LIVE_CMD_ARGS+=("stream-json")
-                skip_next=false
-            elif [[ "$arg" == "--output-format" ]]; then
-                LIVE_CMD_ARGS+=("$arg")
-                skip_next=true
-            else
-                LIVE_CMD_ARGS+=("$arg")
-            fi
-        done
+        if ! prepare_live_command_args; then
+            log_status "ERROR" "Failed to prepare live streaming command. Falling back to background mode."
+            LIVE_OUTPUT=false
+        fi
+    fi
 
-        # Add streaming-specific flags (--verbose and --include-partial-messages)
-        # These are required for stream-json to work properly
-        LIVE_CMD_ARGS+=("--verbose" "--include-partial-messages")
-
-        # jq filter: show text + tool names + newlines for readability
-        local jq_filter='
-            if .type == "stream_event" then
-                if .event.type == "content_block_delta" and .event.delta.type == "text_delta" then
-                    .event.delta.text
-                elif .event.type == "content_block_start" and .event.content_block.type == "tool_use" then
-                    "\n\n⚡ [" + .event.content_block.name + "]\n"
-                elif .event.type == "content_block_stop" then
-                    "\n"
-                else
-                    empty
-                end
-            else
-                empty
-            end'
+    if [[ "$LIVE_OUTPUT" == "true" ]]; then
+        local jq_filter
+        jq_filter=$(get_live_stream_filter)
 
         # Execute with streaming, preserving all flags from build_claude_command()
         # Use stdbuf to disable buffering for real-time output
@@ -1183,34 +1203,26 @@ execute_claude_code() {
         echo ""
         echo -e "${PURPLE}━━━━━━━━━━━━━━━━ End of Output ━━━━━━━━━━━━━━━━━━━${NC}"
 
-        # Extract session ID from stream-json output for session continuity
-        # Stream-json format has session_id in the final "result" type message
-        # Keep full stream output in _stream.log, extract session data separately
+        # Preserve full stream output for downstream analysis and session extraction.
+        # Claude-style stream_json can be collapsed to the final result record,
+        # while Codex JSONL should remain as event output for the shared parser.
         if [[ "$CLAUDE_USE_CONTINUE" == "true" && -f "$output_file" ]]; then
-            # Preserve full stream output for analysis (don't overwrite output_file)
             local stream_output_file="${output_file%.log}_stream.log"
             cp "$output_file" "$stream_output_file"
 
-            # Extract the result message and convert to standard JSON format
-            # Use flexible regex to match various JSON formatting styles
-            # Matches: "type":"result", "type": "result", "type" : "result"
+            # Collapse Claude-style stream_json to the final result object when present.
             local result_line=$(grep -E '"type"[[:space:]]*:[[:space:]]*"result"' "$output_file" 2>/dev/null | tail -1)
 
             if [[ -n "$result_line" ]]; then
-                # Validate that extracted line is valid JSON before using it
                 if echo "$result_line" | jq -e . >/dev/null 2>&1; then
-                    # Write validated result as the output_file for downstream processing
-                    # (save_claude_session and analyze_response expect JSON format)
                     echo "$result_line" > "$output_file"
-                    log_status "INFO" "Extracted and validated session data from stream output"
+                    log_status "INFO" "Collapsed streamed response to the final result record"
                 else
-                    log_status "WARN" "Extracted result line is not valid JSON, keeping stream output"
-                    # Restore original stream output
                     cp "$stream_output_file" "$output_file"
+                    log_status "WARN" "Final result record was invalid JSON, keeping full stream output"
                 fi
             else
-                log_status "WARN" "Could not find result message in stream output"
-                # Keep stream output as-is for debugging
+                log_status "INFO" "Keeping full stream output for shared response analysis"
             fi
         fi
     else
@@ -1305,7 +1317,7 @@ EOF
         log_status "SUCCESS" "✅ $DRIVER_DISPLAY_NAME execution completed successfully"
 
         # Save session ID from JSON output (Phase 1.1)
-        if [[ "$CLAUDE_USE_CONTINUE" == "true" ]]; then
+        if [[ "$CLAUDE_USE_CONTINUE" == "true" ]] && supports_driver_sessions; then
             save_claude_session "$output_file"
         fi
 

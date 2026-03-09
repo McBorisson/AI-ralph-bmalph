@@ -112,7 +112,49 @@ driver_supports_sessions() {
     return 0  # true
 }
 
-# Stream filter for live output (jq filter for JSON streaming)
+# Claude Code supports stream-json live output.
+driver_supports_live_output() {
+    return 0  # true
+}
+
+# Prepare command arguments for live stream-json output.
+driver_prepare_live_command() {
+    LIVE_CMD_ARGS=()
+    local skip_next=false
+
+    for arg in "${CLAUDE_CMD_ARGS[@]}"; do
+        if [[ "$skip_next" == "true" ]]; then
+            LIVE_CMD_ARGS+=("stream-json")
+            skip_next=false
+        elif [[ "$arg" == "--output-format" ]]; then
+            LIVE_CMD_ARGS+=("$arg")
+            skip_next=true
+        else
+            LIVE_CMD_ARGS+=("$arg")
+        fi
+    done
+
+    if [[ "$skip_next" == "true" ]]; then
+        return 1
+    fi
+
+    LIVE_CMD_ARGS+=("--verbose" "--include-partial-messages")
+}
+
+# Stream filter for raw Claude stream-json events.
 driver_stream_filter() {
-    echo '.content // empty | select(type == "string")'
+    echo '
+        if .type == "stream_event" then
+            if .event.type == "content_block_delta" and .event.delta.type == "text_delta" then
+                .event.delta.text
+            elif .event.type == "content_block_start" and .event.content_block.type == "tool_use" then
+                "\n\n⚡ [" + .event.content_block.name + "]\n"
+            elif .event.type == "content_block_stop" then
+                "\n"
+            else
+                empty
+            end
+        else
+            empty
+        end'
 }

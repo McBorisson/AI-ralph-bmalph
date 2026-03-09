@@ -196,6 +196,6 @@ teardown() {
 @test "driver_stream_filter returns jq expression" {
     run driver_stream_filter
     assert_success
-    # Should contain a jq-compatible filter
-    assert_output --partial ".content"
+    assert_output --partial "stream_event"
+    assert_output --partial "content_block_delta"
 }
