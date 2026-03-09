@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { RALPH_DIR } from "../utils/constants.js";
 import { exists } from "../utils/file-system.js";
@@ -91,19 +91,12 @@ export function spawnRalphLoop(
       exitCode = c;
     },
     kill() {
-      if (process.platform !== "win32" && child.pid) {
-        try {
-          process.kill(-child.pid, "SIGTERM");
-        } catch {
-          try {
-            child.kill("SIGTERM");
-          } catch {
-            // Child already dead — ignore
-          }
-        }
-      } else {
-        child.kill("SIGTERM");
+      if (process.platform === "win32") {
+        terminateWindowsProcess(child);
+        return;
       }
+
+      terminateUnixProcessGroup(child);
     },
     detach() {
       child.unref();
@@ -173,6 +166,43 @@ function uniqueWindowsPaths(paths: readonly string[]): string[] {
   }
 
   return unique;
+}
+
+function terminateUnixProcessGroup(child: ChildProcess): void {
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+      return;
+    } catch {
+      // Fall back to the direct child if the process group no longer exists.
+    }
+  }
+
+  terminateChildProcess(child);
+}
+
+function terminateWindowsProcess(child: ChildProcess): void {
+  if (typeof child.pid === "number") {
+    try {
+      execFileSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      return;
+    } catch {
+      // Fall back when taskkill is unavailable or the process has already exited.
+    }
+  }
+
+  terminateChildProcess(child);
+}
+
+function terminateChildProcess(child: ChildProcess): void {
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // Child already dead — ignore.
+  }
 }
 
 async function canExecuteBash(command: string): Promise<boolean> {

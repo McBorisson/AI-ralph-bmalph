@@ -264,16 +264,27 @@ describe("spawnRalphLoop", () => {
     expect(exitCallback).toHaveBeenCalledWith(0);
   });
 
-  it("calls kill on the child process", async () => {
-    const mockChild = createMockChild();
-    mockSpawn.mockReturnValue(mockChild);
+  it("kills the Unix process group when the child pid exists", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
-    const { spawnRalphLoop } = await import("../../src/run/ralph-process.js");
-    const rp = spawnRalphLoop("/project", "claude-code", { inheritStdio: false });
+    try {
+      const mockChild = createMockChild();
+      mockSpawn.mockReturnValue(mockChild);
+      const processKillSpy = vi.spyOn(process, "kill").mockReturnValue(true);
 
-    rp.kill();
+      const { spawnRalphLoop } = await import("../../src/run/ralph-process.js");
+      const rp = spawnRalphLoop("/project", "claude-code", { inheritStdio: false });
 
-    expect(mockChild.kill).toHaveBeenCalled();
+      rp.kill();
+
+      expect(processKillSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
+      expect(mockChild.kill).not.toHaveBeenCalled();
+
+      processKillSpy.mockRestore();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
   });
 
   it("does not throw when fallback child.kill also fails (process already dead)", async () => {
@@ -360,7 +371,7 @@ describe("spawnRalphLoop", () => {
     expect(exitCallback).toHaveBeenCalledWith(null);
   });
 
-  it("uses child.kill directly on win32 platform", async () => {
+  it("uses taskkill to terminate the process tree on win32 platform", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 
@@ -375,10 +386,65 @@ describe("spawnRalphLoop", () => {
 
       rp.kill();
 
-      expect(mockChild.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "taskkill.exe",
+        ["/PID", "12345", "/T", "/F"],
+        expect.objectContaining({
+          stdio: "ignore",
+          windowsHide: true,
+        })
+      );
+      expect(mockChild.kill).not.toHaveBeenCalled();
       expect(processKillSpy).not.toHaveBeenCalled();
 
       processKillSpy.mockRestore();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("falls back to child.kill on win32 when taskkill fails", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      const mockChild = createMockChild();
+      mockSpawn.mockReturnValue(mockChild);
+      mockExecFileSync.mockImplementation(() => {
+        throw new Error("taskkill failed");
+      });
+
+      const { spawnRalphLoop } = await import("../../src/run/ralph-process.js");
+      const rp = spawnRalphLoop("/project", "claude-code", { inheritStdio: false });
+
+      rp.kill();
+
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "taskkill.exe",
+        ["/PID", "12345", "/T", "/F"],
+        expect.any(Object)
+      );
+      expect(mockChild.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("falls back to child.kill on win32 when the child pid is missing", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      const mockChild = createMockChild({ pid: undefined });
+      mockSpawn.mockReturnValue(mockChild);
+
+      const { spawnRalphLoop } = await import("../../src/run/ralph-process.js");
+      const rp = spawnRalphLoop("/project", "claude-code", { inheritStdio: false });
+
+      rp.kill();
+
+      expect(mockExecFileSync).not.toHaveBeenCalled();
+      expect(mockChild.kill).toHaveBeenCalledWith("SIGTERM");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     }
