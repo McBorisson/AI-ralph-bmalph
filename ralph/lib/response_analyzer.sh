@@ -22,6 +22,103 @@ RALPH_DIR="${RALPH_DIR:-.ralph}"
 COMPLETION_KEYWORDS=("done" "complete" "finished" "all tasks complete" "project complete" "ready for review")
 TEST_ONLY_PATTERNS=("npm test" "bats" "pytest" "jest" "cargo test" "go test" "running tests")
 NO_WORK_PATTERNS=("nothing to do" "no changes" "already implemented" "up to date")
+PERMISSION_DENIAL_INLINE_PATTERNS=(
+    "requires approval before it can run"
+    "requires approval before it can proceed"
+    "not allowed to use tool"
+    "not permitted to use tool"
+)
+
+extract_permission_signal_text() {
+    local text=$1
+
+    if [[ -z "$text" ]]; then
+        echo ""
+        return 0
+    fi
+
+    # Only inspect the response preamble for tool refusals. Later paragraphs and
+    # copied logs often contain old permission errors that should not halt Ralph.
+    local signal_source="${text//$'\r'/}"
+    if [[ "$signal_source" == *"---RALPH_STATUS---"* ]]; then
+        signal_source="${signal_source%%---RALPH_STATUS---*}"
+    fi
+
+    local signal_text=""
+    local non_empty_lines=0
+    local trimmed=""
+    local line=""
+
+    while IFS= read -r line; do
+        trimmed="${line#"${line%%[![:space:]]*}"}"
+        trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+
+        if [[ -z "$trimmed" ]]; then
+            if [[ $non_empty_lines -gt 0 ]]; then
+                break
+            fi
+            continue
+        fi
+
+        signal_text+="$trimmed"$'\n'
+        ((non_empty_lines += 1))
+        if [[ $non_empty_lines -ge 5 ]]; then
+            break
+        fi
+    done <<< "$signal_source"
+
+    printf '%s' "$signal_text"
+}
+
+permission_denial_line_matches() {
+    local normalized=$1
+
+    case "$normalized" in
+        permission\ denied:*|denied\ permission:*)
+            [[ "$normalized" == *approval* || "$normalized" == *tool* || "$normalized" == *command* || "$normalized" == *blocked* || "$normalized" == *"not allowed"* || "$normalized" == *"not permitted"* ]]
+            return
+            ;;
+        approval\ required:*)
+            [[ "$normalized" == *run* || "$normalized" == *proceed* || "$normalized" == *tool* || "$normalized" == *command* || "$normalized" == *blocked* ]]
+            return
+            ;;
+    esac
+
+    return 1
+}
+
+contains_permission_denial_signal() {
+    local signal_text=$1
+
+    if [[ -z "$signal_text" ]]; then
+        return 1
+    fi
+
+    local line
+    while IFS= read -r line; do
+        local trimmed="${line#"${line%%[![:space:]]*}"}"
+        local normalized="${trimmed,,}"
+
+        if permission_denial_line_matches "$normalized"; then
+            return 0
+        fi
+
+        local pattern
+        for pattern in "${PERMISSION_DENIAL_INLINE_PATTERNS[@]}"; do
+            if [[ "$normalized" == *"$pattern"* ]]; then
+                return 0
+            fi
+        done
+    done <<< "$signal_text"
+
+    return 1
+}
+
+contains_permission_denial_text() {
+    local signal_text
+    signal_text=$(extract_permission_signal_text "$1")
+    contains_permission_denial_signal "$signal_text"
+}
 
 # =============================================================================
 # JSON OUTPUT FORMAT DETECTION AND PARSING
@@ -452,6 +549,14 @@ parse_json_response() {
         denied_commands_json=$(jq -r -j '[.permission_denials[] | if .tool_name == "Bash" then "Bash(\(.tool_input.command // "?" | split("\n")[0] | .[0:60]))" else .tool_name // "unknown" end]' "$output_file" 2>/dev/null || echo "[]")
     fi
 
+    # Heuristic permission-denial matching is limited to the refusal-shaped
+    # response preamble, not arbitrary prose or copied logs later in the body.
+    if [[ "$has_permission_denials" != "true" ]] && contains_permission_denial_text "$summary"; then
+        has_permission_denials="true"
+        permission_denial_count=1
+        denied_commands_json='["permission_denied"]'
+    fi
+
     # Apply completion heuristics to normalized summary text when explicit structured
     # completion markers are absent. This keeps JSONL analysis aligned with text mode.
     local summary_has_completion_keyword="false"
@@ -873,8 +978,18 @@ analyze_response() {
         fi
     fi
 
+    local has_permission_denials=false
+    local permission_denial_count=0
+    local denied_commands_json='[]'
+    local permission_signal_text=""
+    permission_signal_text=$(extract_permission_signal_text "$output_content")
+    if contains_permission_denial_text "$work_summary" || contains_permission_denial_signal "$permission_signal_text"; then
+        has_permission_denials=true
+        permission_denial_count=1
+        denied_commands_json='["permission_denied"]'
+    fi
+
     # Write analysis results to file (text parsing path) using jq for safe construction
-    # Note: Permission denial fields default to false/0 since text output doesn't include this data
     jq -n \
         --argjson loop_number "$loop_number" \
         --arg timestamp "$(get_iso_timestamp)" \
@@ -889,6 +1004,9 @@ analyze_response() {
         --argjson exit_signal "$exit_signal" \
         --arg work_summary "$work_summary" \
         --argjson output_length "$output_length" \
+        --argjson has_permission_denials "$has_permission_denials" \
+        --argjson permission_denial_count "$permission_denial_count" \
+        --argjson denied_commands "$denied_commands_json" \
         '{
             loop_number: $loop_number,
             timestamp: $timestamp,
@@ -904,9 +1022,9 @@ analyze_response() {
                 exit_signal: $exit_signal,
                 work_summary: $work_summary,
                 output_length: $output_length,
-                has_permission_denials: false,
-                permission_denial_count: 0,
-                denied_commands: []
+                has_permission_denials: $has_permission_denials,
+                permission_denial_count: $permission_denial_count,
+                denied_commands: $denied_commands
             }
         }' > "$analysis_result_file"
 
@@ -930,6 +1048,7 @@ update_exit_signals() {
     local has_completion_signal=$(jq -r -j '.analysis.has_completion_signal' "$analysis_file")
     local loop_number=$(jq -r -j '.loop_number' "$analysis_file")
     local has_progress=$(jq -r -j '.analysis.has_progress' "$analysis_file")
+    local has_permission_denials=$(jq -r -j '.analysis.has_permission_denials // false' "$analysis_file")
 
     # Read current exit signals
     local signals=$(cat "$exit_signals_file" 2>/dev/null || echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": []}')
@@ -944,8 +1063,9 @@ update_exit_signals() {
         fi
     fi
 
-    # Update done_signals array
-    if [[ "$has_completion_signal" == "true" ]]; then
+    # Permission denials are handled in the same loop, so they must not become
+    # completion state that can halt the next loop.
+    if [[ "$has_permission_denials" != "true" && "$has_completion_signal" == "true" ]]; then
         signals=$(echo "$signals" | jq ".done_signals += [$loop_number]")
     fi
 
@@ -954,7 +1074,7 @@ update_exit_signals() {
     # due to deterministic scoring (+50 for JSON format, +20 for result field).
     # This caused premature exits after 5 loops. Now we respect Claude's explicit intent.
     local exit_signal=$(jq -r -j '.analysis.exit_signal // false' "$analysis_file")
-    if [[ "$exit_signal" == "true" ]]; then
+    if [[ "$has_permission_denials" != "true" && "$exit_signal" == "true" ]]; then
         signals=$(echo "$signals" | jq ".completion_indicators += [$loop_number]")
     fi
 

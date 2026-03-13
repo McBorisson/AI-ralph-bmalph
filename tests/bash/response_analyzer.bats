@@ -13,6 +13,37 @@ teardown() {
 }
 
 # ===========================================================================
+# permission denial helpers
+# ===========================================================================
+
+@test "contains_permission_denial_text matches approval refusal in the response preamble" {
+    local text='Permission denied: shell command requires approval before it can run.
+
+---RALPH_STATUS---
+STATUS: BLOCKED
+EXIT_SIGNAL: false
+---END_RALPH_STATUS---'
+
+    run contains_permission_denial_text "$text"
+    assert_success
+}
+
+@test "contains_permission_denial_text ignores permission denied log excerpts after the first paragraph" {
+    local text='Implemented the cache cleanup fix and reran the workflow successfully.
+
+Copied prior failing log for context:
+Permission denied: opening /tmp/cache.lock
+
+---RALPH_STATUS---
+STATUS: IN_PROGRESS
+EXIT_SIGNAL: false
+---END_RALPH_STATUS---'
+
+    run contains_permission_denial_text "$text"
+    assert_failure
+}
+
+# ===========================================================================
 # detect_output_format
 # ===========================================================================
 
@@ -281,6 +312,56 @@ EOF
     assert_output "AskUserQuestion"
 }
 
+@test "parse_json_response detects generic permission denials in Codex JSONL summaries" {
+    _skip_if_xargs_broken
+    local result="$RALPH_DIR/result.json"
+    parse_json_response "$FIXTURES_DIR/codex_jsonl_permission_denied.jsonl" "$result"
+
+    run jq -r '.has_permission_denials' "$result"
+    assert_output "true"
+
+    run jq -r '.permission_denial_count' "$result"
+    assert_output "1"
+}
+
+@test "parse_json_response ignores normal Codex summaries that mention permission errors" {
+    _skip_if_xargs_broken
+    local output_file="$RALPH_DIR/codex_jsonl_permission_context.jsonl"
+    cat > "$output_file" <<'EOF'
+{"type":"thread.started","thread_id":"codex-thread-context-1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","text":"Fixed a permission denied error in the test harness and reran the suite.\n\n---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nEXIT_SIGNAL: false\n---END_RALPH_STATUS---"}}
+EOF
+
+    local result="$RALPH_DIR/result.json"
+    parse_json_response "$output_file" "$result"
+
+    run jq -r '.has_permission_denials' "$result"
+    assert_output "false"
+
+    run jq -r '.permission_denial_count' "$result"
+    assert_output "0"
+}
+
+@test "parse_json_response ignores quoted permission log lines after a normal summary preamble" {
+    _skip_if_xargs_broken
+    local output_file="$RALPH_DIR/codex_jsonl_permission_log_excerpt.jsonl"
+    cat > "$output_file" <<'EOF'
+{"type":"thread.started","thread_id":"codex-thread-context-2"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","text":"Implemented the asset pipeline fix and reran the suite successfully.\n\nCopied prior failing log for context:\nPermission denied: opening /tmp/cache.lock\n\n---RALPH_STATUS---\nSTATUS: IN_PROGRESS\nEXIT_SIGNAL: false\n---END_RALPH_STATUS---"}}
+EOF
+
+    local result="$RALPH_DIR/result.json"
+    parse_json_response "$output_file" "$result"
+
+    run jq -r '.has_permission_denials' "$result"
+    assert_output "false"
+
+    run jq -r '.permission_denial_count' "$result"
+    assert_output "0"
+}
+
 # ===========================================================================
 # parse_json_response — error handling
 # ===========================================================================
@@ -412,6 +493,71 @@ EOF
 
     run jq -r '.analysis.has_completion_signal' "$analysis"
     assert_output "false"
+}
+
+@test "analyze_response text fallback detects explicit approval refusals" {
+    local text_file="$RALPH_DIR/approval_refusal.txt"
+    cat > "$text_file" <<'EOF'
+Permission denied: shell command requires approval before it can run.
+
+---RALPH_STATUS---
+STATUS: BLOCKED
+EXIT_SIGNAL: false
+---END_RALPH_STATUS---
+EOF
+
+    local analysis="$RALPH_DIR/.response_analysis"
+    run analyze_response "$text_file" 1 "$analysis"
+    assert_success
+
+    run jq -r '.analysis.has_permission_denials' "$analysis"
+    assert_output "true"
+
+    run jq -r '.analysis.permission_denial_count' "$analysis"
+    assert_output "1"
+}
+
+@test "analyze_response text fallback ignores normal permission-error discussion" {
+    local text_file="$RALPH_DIR/permission_context.txt"
+    cat > "$text_file" <<'EOF'
+Implemented a fix for the permission denied failure in the asset copy test and reran the suite successfully.
+No approval prompt was shown during this loop.
+EOF
+
+    local analysis="$RALPH_DIR/.response_analysis"
+    run analyze_response "$text_file" 1 "$analysis"
+    assert_success
+
+    run jq -r '.analysis.has_permission_denials' "$analysis"
+    assert_output "false"
+
+    run jq -r '.analysis.permission_denial_count' "$analysis"
+    assert_output "0"
+}
+
+@test "analyze_response text fallback ignores pasted permission denied logs outside the preamble" {
+    local text_file="$RALPH_DIR/permission_log_excerpt.txt"
+    cat > "$text_file" <<'EOF'
+Implemented the cache cleanup fix and reran the workflow successfully.
+
+Previous failing log for reference:
+Permission denied: opening /tmp/cache.lock
+
+---RALPH_STATUS---
+STATUS: IN_PROGRESS
+EXIT_SIGNAL: false
+---END_RALPH_STATUS---
+EOF
+
+    local analysis="$RALPH_DIR/.response_analysis"
+    run analyze_response "$text_file" 1 "$analysis"
+    assert_success
+
+    run jq -r '.analysis.has_permission_denials' "$analysis"
+    assert_output "false"
+
+    run jq -r '.analysis.permission_denial_count' "$analysis"
+    assert_output "0"
 }
 
 @test "analyze_response detects stuck/error patterns in text" {
@@ -654,6 +800,30 @@ EOF
 
     run jq '.completion_indicators | length' "$signals"
     assert_output "1"
+}
+
+@test "update_exit_signals ignores completion state from denied loops" {
+    local analysis="$RALPH_DIR/.response_analysis"
+    local signals="$RALPH_DIR/.exit_signals"
+
+    echo '{"test_only_loops": [], "done_signals": [2], "completion_indicators": [2,4]}' > "$signals"
+    jq -n \
+        '{
+            loop_number: 5,
+            analysis: {
+                is_test_only: false,
+                has_completion_signal: true,
+                has_progress: true,
+                exit_signal: true,
+                has_permission_denials: true
+            }
+        }' > "$analysis"
+
+    run update_exit_signals "$analysis" "$signals"
+    assert_success
+
+    run jq -c '{done_signals, completion_indicators}' "$signals"
+    assert_output '{"done_signals":[2],"completion_indicators":[2,4]}'
 }
 
 @test "update_exit_signals keeps rolling window of 5" {

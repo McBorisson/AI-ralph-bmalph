@@ -38,6 +38,7 @@ driver_valid_tools() {
         "TodoWrite"
         "WebFetch"
         "WebSearch"
+        "AskUserQuestion"
         "Bash"
         "Bash(git *)"
         "Bash(npm *)"
@@ -46,6 +47,24 @@ driver_valid_tools() {
         "Bash(node *)"
         "NotebookEdit"
     )
+}
+
+driver_supports_tool_allowlist() {
+    return 0
+}
+
+driver_permission_denial_help() {
+    echo "  1. Edit $RALPHRC_FILE and update ALLOWED_TOOLS to include the required tools"
+    echo "  2. Common patterns:"
+    echo "     - Bash                - All shell commands"
+    echo "     - Bash(node *)        - All Node.js commands"
+    echo "     - Bash(npm *)         - All npm commands"
+    echo "     - Bash(pnpm *)        - All pnpm commands"
+    echo "     - AskUserQuestion     - Allow interactive clarification when you want pauses"
+    echo ""
+    echo "After updating $RALPHRC_FILE:"
+    echo "  bash .ralph/ralph_loop.sh --reset-session  # Clear stale session state"
+    echo "  bmalph run                                 # Restart the loop"
 }
 
 # Build the CLI command arguments

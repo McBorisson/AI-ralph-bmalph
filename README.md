@@ -447,12 +447,23 @@ wsl --install
 If you get permission errors:
 
 ```bash
-# Unix/Mac: Make driver scripts executable
-chmod +x .ralph/drivers/*.sh
+# Claude Code only: broaden the tool allowlist in the managed config
+# .ralph/.ralphrc
+ALLOWED_TOOLS="Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"
 
-# Check file ownership
-ls -la .ralph/
+# Keep the loop unattended by continuing after detected denials
+PERMISSION_DENIAL_MODE="continue"
+
+# Reset stale session state and restart
+bash .ralph/ralph_loop.sh --reset-session
+bmalph run
 ```
+
+Notes:
+
+- `ALLOWED_TOOLS` only applies to the Claude Code driver.
+- Codex, Cursor, and Copilot use their native sandbox/approval settings instead.
+- Fresh installs default to unattended mode and discourage in-loop user questions via `.ralph/PROMPT.md`.
 
 ### Common Issues
 

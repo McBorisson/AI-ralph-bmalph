@@ -203,7 +203,7 @@ record_loop_result() {
         has_permission_denials=$(jq -r '.analysis.has_permission_denials // false' "$response_analysis_file" 2>/dev/null || echo "false")
     fi
 
-    if [[ "$has_permission_denials" == "true" ]]; then
+    if [[ "${PERMISSION_DENIAL_MODE:-halt}" == "threshold" && "$has_permission_denials" == "true" ]]; then
         consecutive_permission_denials=$((consecutive_permission_denials + 1))
     else
         consecutive_permission_denials=0
@@ -248,7 +248,7 @@ record_loop_result() {
             # Permission denials take highest priority (Issue #101)
             if [[ $consecutive_permission_denials -ge $CB_PERMISSION_DENIAL_THRESHOLD ]]; then
                 new_state="$CB_STATE_OPEN"
-                reason="Permission denied in $consecutive_permission_denials consecutive loops - update ALLOWED_TOOLS in .ralphrc"
+                reason="Permission denied in $consecutive_permission_denials consecutive loops"
             elif [[ $consecutive_no_progress -ge $CB_NO_PROGRESS_THRESHOLD ]]; then
                 new_state="$CB_STATE_OPEN"
                 reason="No progress detected in $consecutive_no_progress consecutive loops"
@@ -266,7 +266,7 @@ record_loop_result() {
             # Permission denials take highest priority (Issue #101)
             if [[ $consecutive_permission_denials -ge $CB_PERMISSION_DENIAL_THRESHOLD ]]; then
                 new_state="$CB_STATE_OPEN"
-                reason="Permission denied in $consecutive_permission_denials consecutive loops - update ALLOWED_TOOLS in .ralphrc"
+                reason="Permission denied in $consecutive_permission_denials consecutive loops"
             elif [[ "$has_progress" == "true" ]]; then
                 new_state="$CB_STATE_CLOSED"
                 reason="Progress detected, circuit recovered"

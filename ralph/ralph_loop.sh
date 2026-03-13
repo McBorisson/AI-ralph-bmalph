@@ -42,7 +42,28 @@ _env_CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-}"
 _env_CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-}"
 _env_CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-}"
 _env_CLAUDE_SESSION_EXPIRY_HOURS="${CLAUDE_SESSION_EXPIRY_HOURS:-}"
+_env_ALLOWED_TOOLS="${ALLOWED_TOOLS:-}"
+_env_SESSION_CONTINUITY="${SESSION_CONTINUITY:-}"
+_env_SESSION_EXPIRY_HOURS="${SESSION_EXPIRY_HOURS:-}"
+_env_PERMISSION_DENIAL_MODE="${PERMISSION_DENIAL_MODE:-}"
+_env_RALPH_VERBOSE="${RALPH_VERBOSE:-}"
 _env_VERBOSE_PROGRESS="${VERBOSE_PROGRESS:-}"
+
+# CLI flags are parsed before main() runs, so capture explicit values separately.
+_CLI_MAX_CALLS_PER_HOUR="${_CLI_MAX_CALLS_PER_HOUR:-}"
+_CLI_CLAUDE_TIMEOUT_MINUTES="${_CLI_CLAUDE_TIMEOUT_MINUTES:-}"
+_CLI_CLAUDE_OUTPUT_FORMAT="${_CLI_CLAUDE_OUTPUT_FORMAT:-}"
+_CLI_ALLOWED_TOOLS="${_CLI_ALLOWED_TOOLS:-}"
+_CLI_SESSION_CONTINUITY="${_CLI_SESSION_CONTINUITY:-}"
+_CLI_SESSION_EXPIRY_HOURS="${_CLI_SESSION_EXPIRY_HOURS:-}"
+_CLI_VERBOSE_PROGRESS="${_CLI_VERBOSE_PROGRESS:-}"
+_cli_MAX_CALLS_PER_HOUR="${MAX_CALLS_PER_HOUR:-}"
+_cli_CLAUDE_TIMEOUT_MINUTES="${CLAUDE_TIMEOUT_MINUTES:-}"
+_cli_CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-}"
+_cli_CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-}"
+_cli_CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-}"
+_cli_CLAUDE_SESSION_EXPIRY_HOURS="${CLAUDE_SESSION_EXPIRY_HOURS:-}"
+_cli_VERBOSE_PROGRESS="${VERBOSE_PROGRESS:-}"
 _env_CB_COOLDOWN_MINUTES="${CB_COOLDOWN_MINUTES:-}"
 _env_CB_AUTO_RESET="${CB_AUTO_RESET:-}"
 
@@ -50,11 +71,14 @@ _env_CB_AUTO_RESET="${CB_AUTO_RESET:-}"
 MAX_CALLS_PER_HOUR="${MAX_CALLS_PER_HOUR:-100}"
 VERBOSE_PROGRESS="${VERBOSE_PROGRESS:-false}"
 CLAUDE_TIMEOUT_MINUTES="${CLAUDE_TIMEOUT_MINUTES:-15}"
+DEFAULT_CLAUDE_ALLOWED_TOOLS="Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"
+DEFAULT_PERMISSION_DENIAL_MODE="continue"
 
 # Modern Claude CLI configuration (Phase 1.1)
 CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-json}"
-CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)}"
+CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-$DEFAULT_CLAUDE_ALLOWED_TOOLS}"
 CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-true}"
+PERMISSION_DENIAL_MODE="${PERMISSION_DENIAL_MODE:-$DEFAULT_PERMISSION_DENIAL_MODE}"
 CLAUDE_SESSION_FILE="$RALPH_DIR/.claude_session_id" # Session ID persistence file
 CLAUDE_MIN_VERSION="2.0.76"              # Minimum required Claude CLI version
 
@@ -80,6 +104,7 @@ VALID_TOOL_PATTERNS=(
     "TodoWrite"
     "WebFetch"
     "WebSearch"
+    "AskUserQuestion"
     "Bash"
     "Bash(git *)"
     "Bash(npm *)"
@@ -88,6 +113,8 @@ VALID_TOOL_PATTERNS=(
     "Bash(node *)"
     "NotebookEdit"
 )
+ALLOWED_TOOLS_IGNORED_WARNED=false
+PERMISSION_DENIAL_ACTION=""
 
 # Exit detection configuration
 EXIT_SIGNALS_FILE="$RALPH_DIR/.exit_signals"
@@ -131,7 +158,8 @@ resolve_ralphrc_file() {
 #   - MAX_CALLS_PER_HOUR
 #   - CLAUDE_TIMEOUT_MINUTES
 #   - CLAUDE_OUTPUT_FORMAT
-#   - ALLOWED_TOOLS (mapped to CLAUDE_ALLOWED_TOOLS)
+#   - ALLOWED_TOOLS (mapped to CLAUDE_ALLOWED_TOOLS for Claude Code only)
+#   - PERMISSION_DENIAL_MODE
 #   - SESSION_CONTINUITY (mapped to CLAUDE_USE_CONTINUE)
 #   - SESSION_EXPIRY_HOURS (mapped to CLAUDE_SESSION_EXPIRY_HOURS)
 #   - CB_NO_PROGRESS_THRESHOLD
@@ -155,6 +183,9 @@ load_ralphrc() {
     if [[ -n "${ALLOWED_TOOLS:-}" ]]; then
         CLAUDE_ALLOWED_TOOLS="$ALLOWED_TOOLS"
     fi
+    if [[ -n "${PERMISSION_DENIAL_MODE:-}" ]]; then
+        PERMISSION_DENIAL_MODE="$PERMISSION_DENIAL_MODE"
+    fi
     if [[ -n "${SESSION_CONTINUITY:-}" ]]; then
         CLAUDE_USE_CONTINUE="$SESSION_CONTINUITY"
     fi
@@ -167,20 +198,50 @@ load_ralphrc() {
 
     # Restore ONLY values that were explicitly set via environment variables
     # (not script defaults). The _env_* variables were captured BEFORE defaults were set.
-    # If _env_* is non-empty, the user explicitly set it in their environment.
+    # Internal CLAUDE_* variables are kept for backward compatibility.
     [[ -n "$_env_MAX_CALLS_PER_HOUR" ]] && MAX_CALLS_PER_HOUR="$_env_MAX_CALLS_PER_HOUR"
     [[ -n "$_env_CLAUDE_TIMEOUT_MINUTES" ]] && CLAUDE_TIMEOUT_MINUTES="$_env_CLAUDE_TIMEOUT_MINUTES"
     [[ -n "$_env_CLAUDE_OUTPUT_FORMAT" ]] && CLAUDE_OUTPUT_FORMAT="$_env_CLAUDE_OUTPUT_FORMAT"
     [[ -n "$_env_CLAUDE_ALLOWED_TOOLS" ]] && CLAUDE_ALLOWED_TOOLS="$_env_CLAUDE_ALLOWED_TOOLS"
     [[ -n "$_env_CLAUDE_USE_CONTINUE" ]] && CLAUDE_USE_CONTINUE="$_env_CLAUDE_USE_CONTINUE"
     [[ -n "$_env_CLAUDE_SESSION_EXPIRY_HOURS" ]] && CLAUDE_SESSION_EXPIRY_HOURS="$_env_CLAUDE_SESSION_EXPIRY_HOURS"
+    [[ -n "$_env_PERMISSION_DENIAL_MODE" ]] && PERMISSION_DENIAL_MODE="$_env_PERMISSION_DENIAL_MODE"
     [[ -n "$_env_VERBOSE_PROGRESS" ]] && VERBOSE_PROGRESS="$_env_VERBOSE_PROGRESS"
+
+    # Public aliases are the preferred external interface and win over the
+    # legacy internal environment variables when both are explicitly set.
+    [[ -n "$_env_ALLOWED_TOOLS" ]] && CLAUDE_ALLOWED_TOOLS="$_env_ALLOWED_TOOLS"
+    [[ -n "$_env_SESSION_CONTINUITY" ]] && CLAUDE_USE_CONTINUE="$_env_SESSION_CONTINUITY"
+    [[ -n "$_env_SESSION_EXPIRY_HOURS" ]] && CLAUDE_SESSION_EXPIRY_HOURS="$_env_SESSION_EXPIRY_HOURS"
+    [[ -n "$_env_RALPH_VERBOSE" ]] && VERBOSE_PROGRESS="$_env_RALPH_VERBOSE"
+
+    # CLI flags are the highest-priority runtime inputs because they are
+    # parsed before main() and would otherwise be overwritten by .ralphrc.
+    # Keep every config-backed CLI flag here so the precedence contract stays
+    # consistent: CLI > public env aliases > internal env vars > config.
+    [[ "$_CLI_MAX_CALLS_PER_HOUR" == "true" ]] && MAX_CALLS_PER_HOUR="$_cli_MAX_CALLS_PER_HOUR"
+    [[ "$_CLI_CLAUDE_TIMEOUT_MINUTES" == "true" ]] && CLAUDE_TIMEOUT_MINUTES="$_cli_CLAUDE_TIMEOUT_MINUTES"
+    [[ "$_CLI_CLAUDE_OUTPUT_FORMAT" == "true" ]] && CLAUDE_OUTPUT_FORMAT="$_cli_CLAUDE_OUTPUT_FORMAT"
+    [[ "$_CLI_ALLOWED_TOOLS" == "true" ]] && CLAUDE_ALLOWED_TOOLS="$_cli_CLAUDE_ALLOWED_TOOLS"
+    [[ "$_CLI_SESSION_CONTINUITY" == "true" ]] && CLAUDE_USE_CONTINUE="$_cli_CLAUDE_USE_CONTINUE"
+    [[ "$_CLI_SESSION_EXPIRY_HOURS" == "true" ]] && CLAUDE_SESSION_EXPIRY_HOURS="$_cli_CLAUDE_SESSION_EXPIRY_HOURS"
+    [[ "$_CLI_VERBOSE_PROGRESS" == "true" ]] && VERBOSE_PROGRESS="$_cli_VERBOSE_PROGRESS"
     [[ -n "$_env_CB_COOLDOWN_MINUTES" ]] && CB_COOLDOWN_MINUTES="$_env_CB_COOLDOWN_MINUTES"
     [[ -n "$_env_CB_AUTO_RESET" ]] && CB_AUTO_RESET="$_env_CB_AUTO_RESET"
 
     RALPHRC_FILE="$config_file"
     RALPHRC_LOADED=true
     return 0
+}
+
+driver_supports_tool_allowlist() {
+    return 1
+}
+
+driver_permission_denial_help() {
+    echo "  - Review the active driver's permission or approval settings."
+    echo "  - ALLOWED_TOOLS in $RALPHRC_FILE only applies to the Claude Code driver."
+    echo "  - After updating permissions, reset the session and restart the loop."
 }
 
 # Source platform driver
@@ -323,8 +384,8 @@ setup_tmux_session() {
     if [[ "$CLAUDE_TIMEOUT_MINUTES" != "15" ]]; then
         ralph_cmd="$ralph_cmd --timeout $CLAUDE_TIMEOUT_MINUTES"
     fi
-    # Forward --allowed-tools if non-default
-    if [[ "$CLAUDE_ALLOWED_TOOLS" != "Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)" ]]; then
+    # Forward --allowed-tools only for drivers that support tool allowlists
+    if driver_supports_tool_allowlist && [[ "$CLAUDE_ALLOWED_TOOLS" != "$DEFAULT_CLAUDE_ALLOWED_TOOLS" ]]; then
         ralph_cmd="$ralph_cmd --allowed-tools '$CLAUDE_ALLOWED_TOOLS'"
     fi
     # Forward --no-continue if session continuity disabled
@@ -443,6 +504,154 @@ update_status() {
         }' > "$STATUS_FILE"
 }
 
+validate_permission_denial_mode() {
+    local mode=$1
+
+    case "$mode" in
+        continue|halt|threshold)
+            return 0
+            ;;
+        *)
+            echo "Error: Invalid PERMISSION_DENIAL_MODE: '$mode'"
+            echo "Valid modes: continue halt threshold"
+            return 1
+            ;;
+    esac
+}
+
+warn_if_allowed_tools_ignored() {
+    if driver_supports_tool_allowlist; then
+        return 0
+    fi
+
+    if [[ "$ALLOWED_TOOLS_IGNORED_WARNED" == "true" ]]; then
+        return 0
+    fi
+
+    if [[ "${_CLI_ALLOWED_TOOLS:-}" == "true" || "$CLAUDE_ALLOWED_TOOLS" != "$DEFAULT_CLAUDE_ALLOWED_TOOLS" ]]; then
+        log_status "WARN" "ALLOWED_TOOLS/--allowed-tools is ignored by $DRIVER_DISPLAY_NAME."
+        ALLOWED_TOOLS_IGNORED_WARNED=true
+    fi
+
+    return 0
+}
+
+show_current_allowed_tools() {
+    if ! driver_supports_tool_allowlist; then
+        return 0
+    fi
+
+    if [[ -f "$RALPHRC_FILE" ]]; then
+        local current_tools=$(grep "^ALLOWED_TOOLS=" "$RALPHRC_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"')
+        if [[ -n "$current_tools" ]]; then
+            echo -e "${BLUE}Current ALLOWED_TOOLS:${NC} $current_tools"
+            echo ""
+        fi
+    fi
+
+    return 0
+}
+
+response_analysis_has_permission_denials() {
+    if [[ ! -f "$RESPONSE_ANALYSIS_FILE" ]]; then
+        return 1
+    fi
+
+    local has_permission_denials
+    has_permission_denials=$(jq -r '.analysis.has_permission_denials // false' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null || echo "false")
+
+    [[ "$has_permission_denials" == "true" ]]
+}
+
+get_response_analysis_denied_commands() {
+    if [[ ! -f "$RESPONSE_ANALYSIS_FILE" ]]; then
+        echo "unknown"
+        return 0
+    fi
+
+    jq -r '.analysis.denied_commands | join(", ")' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null || echo "unknown"
+}
+
+clear_response_analysis_permission_denials() {
+    if [[ ! -f "$RESPONSE_ANALYSIS_FILE" ]]; then
+        return 0
+    fi
+
+    local tmp_file="$RESPONSE_ANALYSIS_FILE.tmp"
+    if jq '
+        (.analysis //= {}) |
+        .analysis.has_completion_signal = false |
+        .analysis.exit_signal = false |
+        .analysis.has_permission_denials = false |
+        .analysis.permission_denial_count = 0 |
+        .analysis.denied_commands = []
+    ' "$RESPONSE_ANALYSIS_FILE" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$RESPONSE_ANALYSIS_FILE"
+        return 0
+    fi
+
+    rm -f "$tmp_file" 2>/dev/null
+    return 1
+}
+
+handle_permission_denial() {
+    local loop_count=$1
+    local denied_cmds=${2:-unknown}
+    local calls_made
+    calls_made=$(cat "$CALL_COUNT_FILE" 2>/dev/null || echo "0")
+    PERMISSION_DENIAL_ACTION=""
+
+    case "$PERMISSION_DENIAL_MODE" in
+        continue|threshold)
+            log_status "WARN" "🚫 Permission denied in loop #$loop_count: $denied_cmds"
+            log_status "WARN" "PERMISSION_DENIAL_MODE=$PERMISSION_DENIAL_MODE - continuing execution"
+            update_status "$loop_count" "$calls_made" "permission_denied" "running"
+            PERMISSION_DENIAL_ACTION="continue"
+            return 0
+            ;;
+        halt)
+            log_status "ERROR" "🚫 Permission denied - halting loop"
+            reset_session "permission_denied"
+            update_status "$loop_count" "$calls_made" "permission_denied" "halted" "permission_denied"
+
+            echo ""
+            echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  PERMISSION DENIED - Loop Halted                          ║${NC}"
+            echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${YELLOW}$DRIVER_DISPLAY_NAME was denied permission to execute commands.${NC}"
+            echo ""
+            echo -e "${YELLOW}To fix this:${NC}"
+            driver_permission_denial_help
+            echo ""
+            show_current_allowed_tools
+            PERMISSION_DENIAL_ACTION="halt"
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+consume_current_loop_permission_denial() {
+    local loop_count=$1
+    PERMISSION_DENIAL_ACTION=""
+
+    if ! response_analysis_has_permission_denials; then
+        return 1
+    fi
+
+    local denied_cmds
+    denied_cmds=$(get_response_analysis_denied_commands)
+
+    if ! clear_response_analysis_permission_denials; then
+        log_status "WARN" "Failed to clear permission denial markers from response analysis"
+    fi
+
+    handle_permission_denial "$loop_count" "$denied_cmds"
+    return 0
+}
+
 # Check if we can make another call
 can_make_call() {
     local calls_made=0
@@ -507,21 +716,6 @@ should_exit_gracefully() {
     
 
     # Check for exit conditions
-
-    # 0. Permission denials (highest priority - Issue #101)
-    # When Claude Code is denied permission to run commands, halt immediately
-    # to allow user to update .ralphrc ALLOWED_TOOLS configuration
-    if [[ -f "$RESPONSE_ANALYSIS_FILE" ]]; then
-        local has_permission_denials=$(jq -r '.analysis.has_permission_denials // false' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null || echo "false")
-        if [[ "$has_permission_denials" == "true" ]]; then
-            local denied_count=$(jq -r '.analysis.permission_denial_count // 0' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null || echo "0")
-            local denied_cmds=$(jq -r '.analysis.denied_commands | join(", ")' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null || echo "unknown")
-            log_status "WARN" "🚫 Permission denied for $denied_count command(s): $denied_cmds"
-            log_status "WARN" "Update ALLOWED_TOOLS in .ralphrc to include the required tools"
-            echo "permission_denied"
-            return 0
-        fi
-    fi
 
     # 1. Too many consecutive test-only loops
     if [[ $recent_test_loops -ge $MAX_CONSECUTIVE_TEST_LOOPS ]]; then
@@ -1435,9 +1629,21 @@ loop_count=0
 main() {
     initialize_runtime_context
 
-    # Validate --allowed-tools now that platform-specific VALID_TOOL_PATTERNS are loaded
-    if [[ "${_CLI_ALLOWED_TOOLS:-}" == "true" ]] && ! validate_allowed_tools "$CLAUDE_ALLOWED_TOOLS"; then
+    if ! validate_permission_denial_mode "$PERMISSION_DENIAL_MODE"; then
         exit 1
+    fi
+
+    if driver_supports_tool_allowlist; then
+        # Validate --allowed-tools now that platform-specific VALID_TOOL_PATTERNS are loaded
+        if [[ "${_CLI_ALLOWED_TOOLS:-}" == "true" ]] && ! validate_allowed_tools "$CLAUDE_ALLOWED_TOOLS"; then
+            exit 1
+        fi
+    else
+        warn_if_allowed_tools_ignored
+    fi
+
+    if [[ "${_CLI_ALLOWED_TOOLS:-}" == "true" ]] && ! driver_supports_tool_allowlist; then
+        _CLI_ALLOWED_TOOLS=""
     fi
 
     log_status "SUCCESS" "🚀 Ralph loop starting with $DRIVER_DISPLAY_NAME"
@@ -1531,45 +1737,6 @@ main() {
         # Check for graceful exit conditions
         local exit_reason=$(should_exit_gracefully)
         if [[ "$exit_reason" != "" ]]; then
-            # Handle permission_denied specially (Issue #101)
-            if [[ "$exit_reason" == "permission_denied" ]]; then
-                log_status "ERROR" "🚫 Permission denied - halting loop"
-                reset_session "permission_denied"
-                update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "permission_denied" "halted" "permission_denied"
-
-                # Display helpful guidance for resolving permission issues
-                echo ""
-                echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-                echo -e "${RED}║  PERMISSION DENIED - Loop Halted                          ║${NC}"
-                echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
-                echo ""
-                echo -e "${YELLOW}$DRIVER_DISPLAY_NAME was denied permission to execute commands.${NC}"
-                echo ""
-                echo -e "${YELLOW}To fix this:${NC}"
-                echo "  1. Edit .ralphrc and update ALLOWED_TOOLS to include the required tools"
-                echo "  2. Common patterns:"
-                echo "     - Bash(npm *)     - All npm commands"
-                echo "     - Bash(npm install) - Only npm install"
-                echo "     - Bash(pnpm *)    - All pnpm commands"
-                echo "     - Bash(yarn *)    - All yarn commands"
-                echo ""
-                echo -e "${YELLOW}After updating .ralphrc:${NC}"
-                echo "  bash .ralph/ralph_loop.sh --reset-session  # Clear stale session state"
-                echo "  bmalph run                                 # Restart the loop"
-                echo ""
-
-                # Show current ALLOWED_TOOLS if .ralphrc exists
-                if [[ -f ".ralphrc" ]]; then
-                    local current_tools=$(grep "^ALLOWED_TOOLS=" ".ralphrc" 2>/dev/null | cut -d= -f2- | tr -d '"')
-                    if [[ -n "$current_tools" ]]; then
-                        echo -e "${BLUE}Current ALLOWED_TOOLS:${NC} $current_tools"
-                        echo ""
-                    fi
-                fi
-
-                break
-            fi
-
             log_status "SUCCESS" "🏁 Graceful exit triggered: $exit_reason"
             reset_session "project_complete"
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "graceful_exit" "completed" "$exit_reason"
@@ -1591,6 +1758,17 @@ main() {
         local exec_result=$?
         
         if [ $exec_result -eq 0 ]; then
+            if consume_current_loop_permission_denial "$loop_count"; then
+                if [[ "$PERMISSION_DENIAL_ACTION" == "halt" ]]; then
+                    break
+                fi
+
+                # Brief pause between loops when the denial was recorded but
+                # policy allows Ralph to continue.
+                sleep 5
+                continue
+            fi
+
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "completed" "success"
 
             # Brief pause between successful executions
@@ -1676,7 +1854,7 @@ Options:
 Modern CLI Options (Phase 1.1):
     --output-format FORMAT  Set driver output format: json or text (default: $CLAUDE_OUTPUT_FORMAT)
                             Note: --live mode requires JSON and will auto-switch
-    --allowed-tools TOOLS   Comma-separated list of allowed tools (default: $CLAUDE_ALLOWED_TOOLS)
+    --allowed-tools TOOLS   Claude Code only. Ignored by codex, cursor, and copilot
     --no-continue           Disable session continuity across loops
     --session-expiry HOURS  Set session expiration time in hours (default: $CLAUDE_SESSION_EXPIRY_HOURS)
 
@@ -1722,6 +1900,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--calls)
             MAX_CALLS_PER_HOUR="$2"
+            _cli_MAX_CALLS_PER_HOUR="$MAX_CALLS_PER_HOUR"
+            _CLI_MAX_CALLS_PER_HOUR=true
             shift 2
             ;;
         -p|--prompt)
@@ -1743,6 +1923,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         -v|--verbose)
             VERBOSE_PROGRESS=true
+            _cli_VERBOSE_PROGRESS="$VERBOSE_PROGRESS"
+            _CLI_VERBOSE_PROGRESS=true
             shift
             ;;
         -l|--live)
@@ -1752,6 +1934,8 @@ while [[ $# -gt 0 ]]; do
         -t|--timeout)
             if [[ "$2" =~ ^[1-9][0-9]*$ ]] && [[ "$2" -le 120 ]]; then
                 CLAUDE_TIMEOUT_MINUTES="$2"
+                _cli_CLAUDE_TIMEOUT_MINUTES="$CLAUDE_TIMEOUT_MINUTES"
+                _CLI_CLAUDE_TIMEOUT_MINUTES=true
             else
                 echo "Error: Timeout must be a positive integer between 1 and 120 minutes"
                 exit 1
@@ -1785,6 +1969,8 @@ while [[ $# -gt 0 ]]; do
         --output-format)
             if [[ "$2" == "json" || "$2" == "text" ]]; then
                 CLAUDE_OUTPUT_FORMAT="$2"
+                _cli_CLAUDE_OUTPUT_FORMAT="$CLAUDE_OUTPUT_FORMAT"
+                _CLI_CLAUDE_OUTPUT_FORMAT=true
             else
                 echo "Error: --output-format must be 'json' or 'text'"
                 exit 1
@@ -1793,11 +1979,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allowed-tools)
             CLAUDE_ALLOWED_TOOLS="$2"
+            _cli_CLAUDE_ALLOWED_TOOLS="$2"
             _CLI_ALLOWED_TOOLS=true
             shift 2
             ;;
         --no-continue)
             CLAUDE_USE_CONTINUE=false
+            _cli_CLAUDE_USE_CONTINUE="$CLAUDE_USE_CONTINUE"
+            _CLI_SESSION_CONTINUITY=true
             shift
             ;;
         --session-expiry)
@@ -1806,6 +1995,8 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CLAUDE_SESSION_EXPIRY_HOURS="$2"
+            _cli_CLAUDE_SESSION_EXPIRY_HOURS="$2"
+            _CLI_SESSION_EXPIRY_HOURS=true
             shift 2
             ;;
         --auto-reset-circuit)

@@ -37,9 +37,10 @@ setup() {
     MAX_CALLS_PER_HOUR=100
     CLAUDE_TIMEOUT_MINUTES=15
     CLAUDE_OUTPUT_FORMAT="json"
-    CLAUDE_ALLOWED_TOOLS="Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)"
+    CLAUDE_ALLOWED_TOOLS="Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"
     CLAUDE_USE_CONTINUE="true"
     CLAUDE_SESSION_EXPIRY_HOURS=24
+    PERMISSION_DENIAL_MODE="continue"
     VERBOSE_PROGRESS="false"
     CLAUDE_MIN_VERSION="2.0.76"
     CLAUDE_CODE_CMD="claude"
@@ -55,9 +56,30 @@ setup() {
     _env_CLAUDE_ALLOWED_TOOLS=""
     _env_CLAUDE_USE_CONTINUE=""
     _env_CLAUDE_SESSION_EXPIRY_HOURS=""
+    _env_ALLOWED_TOOLS=""
+    _env_SESSION_CONTINUITY=""
+    _env_SESSION_EXPIRY_HOURS=""
+    _env_PERMISSION_DENIAL_MODE=""
+    _env_RALPH_VERBOSE=""
     _env_VERBOSE_PROGRESS=""
     _env_CB_COOLDOWN_MINUTES=""
     _env_CB_AUTO_RESET=""
+
+    unset ALLOWED_TOOLS SESSION_CONTINUITY SESSION_EXPIRY_HOURS RALPH_VERBOSE
+    _cli_MAX_CALLS_PER_HOUR=""
+    _cli_CLAUDE_TIMEOUT_MINUTES=""
+    _cli_CLAUDE_OUTPUT_FORMAT=""
+    _cli_CLAUDE_ALLOWED_TOOLS=""
+    _cli_CLAUDE_USE_CONTINUE=""
+    _cli_CLAUDE_SESSION_EXPIRY_HOURS=""
+    _cli_VERBOSE_PROGRESS=""
+    _CLI_MAX_CALLS_PER_HOUR=""
+    _CLI_CLAUDE_TIMEOUT_MINUTES=""
+    _CLI_CLAUDE_OUTPUT_FORMAT=""
+    _CLI_ALLOWED_TOOLS=""
+    _CLI_SESSION_CONTINUITY=""
+    _CLI_SESSION_EXPIRY_HOURS=""
+    _CLI_VERBOSE_PROGRESS=""
 
     mkdir -p "$RALPH_DIR/logs" "$RALPH_DIR/docs/generated"
 }
@@ -87,12 +109,221 @@ teardown() {
     assert_equal "$MAX_CALLS_PER_HOUR" "42"
 }
 
+@test "load_ralphrc applies permission denial mode override" {
+    echo 'PERMISSION_DENIAL_MODE="threshold"' > "$RALPHRC_FILE"
+    load_ralphrc
+    assert_equal "$PERMISSION_DENIAL_MODE" "threshold"
+}
+
 @test "load_ralphrc: env vars take precedence over .ralphrc" {
     echo 'MAX_CALLS_PER_HOUR=42' > "$RALPHRC_FILE"
     _env_MAX_CALLS_PER_HOUR="200"
     MAX_CALLS_PER_HOUR="200"
     load_ralphrc
     assert_equal "$MAX_CALLS_PER_HOUR" "200"
+}
+
+@test "load_ralphrc: ALLOWED_TOOLS env alias overrides .ralphrc" {
+    echo 'ALLOWED_TOOLS="Write"' > "$RALPHRC_FILE"
+    _env_ALLOWED_TOOLS="Write,Bash(node --version)"
+    ALLOWED_TOOLS="Write,Bash(node --version)"
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_ALLOWED_TOOLS" "Write,Bash(node --version)"
+}
+
+@test "load_ralphrc: SESSION_CONTINUITY env alias overrides .ralphrc" {
+    echo 'SESSION_CONTINUITY="false"' > "$RALPHRC_FILE"
+    _env_SESSION_CONTINUITY="true"
+    SESSION_CONTINUITY="true"
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_USE_CONTINUE" "true"
+}
+
+@test "load_ralphrc: SESSION_EXPIRY_HOURS env alias overrides .ralphrc" {
+    echo 'SESSION_EXPIRY_HOURS="12"' > "$RALPHRC_FILE"
+    _env_SESSION_EXPIRY_HOURS="48"
+    SESSION_EXPIRY_HOURS="48"
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_SESSION_EXPIRY_HOURS" "48"
+}
+
+@test "load_ralphrc: RALPH_VERBOSE env alias overrides .ralphrc" {
+    echo 'RALPH_VERBOSE="false"' > "$RALPHRC_FILE"
+    _env_RALPH_VERBOSE="true"
+    RALPH_VERBOSE="true"
+
+    load_ralphrc
+
+    assert_equal "$VERBOSE_PROGRESS" "true"
+}
+
+@test "load_ralphrc: public ALLOWED_TOOLS alias beats internal env override" {
+    echo 'ALLOWED_TOOLS="Edit"' > "$RALPHRC_FILE"
+    _env_ALLOWED_TOOLS="Write,Read"
+    ALLOWED_TOOLS="Write,Read"
+    _env_CLAUDE_ALLOWED_TOOLS="Bash"
+    CLAUDE_ALLOWED_TOOLS="Bash"
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_ALLOWED_TOOLS" "Write,Read"
+}
+
+@test "load_ralphrc: internal CLAUDE_ALLOWED_TOOLS env override still works" {
+    echo 'ALLOWED_TOOLS="Write"' > "$RALPHRC_FILE"
+    _env_CLAUDE_ALLOWED_TOOLS="Read,Edit"
+    CLAUDE_ALLOWED_TOOLS="Read,Edit"
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_ALLOWED_TOOLS" "Read,Edit"
+}
+
+@test "load_ralphrc: internal CLAUDE_USE_CONTINUE env override still works" {
+    echo 'SESSION_CONTINUITY="false"' > "$RALPHRC_FILE"
+    _env_CLAUDE_USE_CONTINUE="true"
+    CLAUDE_USE_CONTINUE="true"
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_USE_CONTINUE" "true"
+}
+
+@test "load_ralphrc: internal CLAUDE_SESSION_EXPIRY_HOURS env override still works" {
+    echo 'SESSION_EXPIRY_HOURS="12"' > "$RALPHRC_FILE"
+    _env_CLAUDE_SESSION_EXPIRY_HOURS="72"
+    CLAUDE_SESSION_EXPIRY_HOURS="72"
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_SESSION_EXPIRY_HOURS" "72"
+}
+
+@test "load_ralphrc: internal VERBOSE_PROGRESS env override still works" {
+    echo 'RALPH_VERBOSE="false"' > "$RALPHRC_FILE"
+    _env_VERBOSE_PROGRESS="true"
+    VERBOSE_PROGRESS="true"
+
+    load_ralphrc
+
+    assert_equal "$VERBOSE_PROGRESS" "true"
+}
+
+@test "load_ralphrc: CLI allowed-tools overrides env alias and .ralphrc" {
+    echo 'ALLOWED_TOOLS="Edit"' > "$RALPHRC_FILE"
+    _env_ALLOWED_TOOLS="Write"
+    ALLOWED_TOOLS="Write"
+    CLAUDE_ALLOWED_TOOLS="Bash(node --version)"
+    _cli_CLAUDE_ALLOWED_TOOLS="Bash(node --version)"
+    _CLI_ALLOWED_TOOLS=true
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_ALLOWED_TOOLS" "Bash(node --version)"
+}
+
+@test "load_ralphrc: CLI session continuity overrides env alias and .ralphrc" {
+    echo 'SESSION_CONTINUITY="true"' > "$RALPHRC_FILE"
+    _env_SESSION_CONTINUITY="true"
+    SESSION_CONTINUITY="true"
+    CLAUDE_USE_CONTINUE="false"
+    _cli_CLAUDE_USE_CONTINUE="false"
+    _CLI_SESSION_CONTINUITY=true
+
+    load_ralphrc
+
+    assert_equal "$CLAUDE_USE_CONTINUE" "false"
+}
+
+@test "load_ralphrc: CLI calls override env and .ralphrc" {
+    run bash -lc "cd '$PROJECT_ROOT' && \
+        tmp_dir=\$(mktemp -d) && \
+        export RALPH_DIR=\"\$tmp_dir\" && \
+        mkdir -p \"\$RALPH_DIR/logs\" \"\$RALPH_DIR/docs/generated\" && \
+        source 'ralph/ralph_loop.sh' && \
+        set +e && \
+        printf 'MAX_CALLS_PER_HOUR=42\n' > \"\$RALPH_DIR/.ralphrc\" && \
+        _env_MAX_CALLS_PER_HOUR='120' && \
+        MAX_CALLS_PER_HOUR='120' && \
+        MAX_CALLS_PER_HOUR='75' && \
+        _cli_MAX_CALLS_PER_HOUR='75' && \
+        _CLI_MAX_CALLS_PER_HOUR=true && \
+        load_ralphrc && \
+        printf '%s' \"\$MAX_CALLS_PER_HOUR\""
+
+    assert_success
+    assert_output "75"
+}
+
+@test "load_ralphrc: CLI timeout overrides env and .ralphrc" {
+    run bash -lc "cd '$PROJECT_ROOT' && \
+        tmp_dir=\$(mktemp -d) && \
+        export RALPH_DIR=\"\$tmp_dir\" && \
+        mkdir -p \"\$RALPH_DIR/logs\" \"\$RALPH_DIR/docs/generated\" && \
+        source 'ralph/ralph_loop.sh' && \
+        set +e && \
+        printf 'CLAUDE_TIMEOUT_MINUTES=22\n' > \"\$RALPH_DIR/.ralphrc\" && \
+        _env_CLAUDE_TIMEOUT_MINUTES='45' && \
+        CLAUDE_TIMEOUT_MINUTES='45' && \
+        CLAUDE_TIMEOUT_MINUTES='9' && \
+        _cli_CLAUDE_TIMEOUT_MINUTES='9' && \
+        _CLI_CLAUDE_TIMEOUT_MINUTES=true && \
+        load_ralphrc && \
+        printf '%s' \"\$CLAUDE_TIMEOUT_MINUTES\""
+
+    assert_success
+    assert_output "9"
+}
+
+@test "load_ralphrc: CLI output format overrides env and .ralphrc" {
+    run bash -lc "cd '$PROJECT_ROOT' && \
+        tmp_dir=\$(mktemp -d) && \
+        export RALPH_DIR=\"\$tmp_dir\" && \
+        mkdir -p \"\$RALPH_DIR/logs\" \"\$RALPH_DIR/docs/generated\" && \
+        source 'ralph/ralph_loop.sh' && \
+        set +e && \
+        printf 'CLAUDE_OUTPUT_FORMAT=\"text\"\n' > \"\$RALPH_DIR/.ralphrc\" && \
+        _env_CLAUDE_OUTPUT_FORMAT='text' && \
+        CLAUDE_OUTPUT_FORMAT='text' && \
+        CLAUDE_OUTPUT_FORMAT='json' && \
+        _cli_CLAUDE_OUTPUT_FORMAT='json' && \
+        _CLI_CLAUDE_OUTPUT_FORMAT=true && \
+        load_ralphrc && \
+        printf '%s' \"\$CLAUDE_OUTPUT_FORMAT\""
+
+    assert_success
+    assert_output "json"
+}
+
+@test "setup_tmux_session forwards restored CLI calls timeout and output format" {
+    run bash -lc "cd '$PROJECT_ROOT' && \
+        tmp_dir=\$(mktemp -d) && \
+        export RALPH_DIR=\"\$tmp_dir\" && \
+        mkdir -p \"\$RALPH_DIR/logs\" \"\$RALPH_DIR/docs/generated\" \"\$RALPH_DIR/bin\" && \
+        source 'ralph/ralph_loop.sh' && \
+        set +e && \
+        cat > \"\$RALPH_DIR/.ralphrc\" <<'EOF'\nMAX_CALLS_PER_HOUR=42\nCLAUDE_TIMEOUT_MINUTES=22\nCLAUDE_OUTPUT_FORMAT=\"json\"\nEOF\n\
+        MAX_CALLS_PER_HOUR='75' && \
+        _cli_MAX_CALLS_PER_HOUR='75' && \
+        _CLI_MAX_CALLS_PER_HOUR=true && \
+        CLAUDE_TIMEOUT_MINUTES='9' && \
+        _cli_CLAUDE_TIMEOUT_MINUTES='9' && \
+        _CLI_CLAUDE_TIMEOUT_MINUTES=true && \
+        CLAUDE_OUTPUT_FORMAT='text' && \
+        _cli_CLAUDE_OUTPUT_FORMAT='text' && \
+        _CLI_CLAUDE_OUTPUT_FORMAT=true && \
+        cat > \"\$RALPH_DIR/bin/tmux\" <<'EOF'\n#!/usr/bin/env bash\nprintf '%s\\n' \"\$*\"\nexit 0\nEOF\n\
+        chmod +x \"\$RALPH_DIR/bin/tmux\" && \
+        export PATH=\"\$RALPH_DIR/bin:\$PATH\" && \
+        setup_tmux_session"
+    assert_success
+    assert_output --partial "--calls 75 --output-format text --timeout 9"
 }
 
 @test "load_ralphrc prefers the bundled .ralph/.ralphrc file" {
@@ -154,6 +385,35 @@ teardown() {
 @test "validate_allowed_tools accepts Bash with any parenthesized content" {
     run validate_allowed_tools "Bash(docker compose *),Write"
     assert_success
+}
+
+@test "validate_allowed_tools accepts AskUserQuestion for Claude opt-in configs" {
+    run validate_allowed_tools "Write,AskUserQuestion,Bash(node --version)"
+    assert_success
+}
+
+@test "warn_if_allowed_tools_ignored warns for drivers without allowlist support" {
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    PLATFORM_DRIVER="codex"
+    load_platform_driver
+    CLAUDE_ALLOWED_TOOLS="Write,Read"
+    _CLI_ALLOWED_TOOLS=true
+
+    run warn_if_allowed_tools_ignored
+    assert_success
+    assert_output --partial "ignored by OpenAI Codex"
+}
+
+@test "warn_if_allowed_tools_ignored stays quiet for Claude Code" {
+    SCRIPT_DIR="$PROJECT_ROOT/ralph"
+    PLATFORM_DRIVER="claude-code"
+    load_platform_driver
+    CLAUDE_ALLOWED_TOOLS="Write,Read"
+    _CLI_ALLOWED_TOOLS=true
+
+    run warn_if_allowed_tools_ignored
+    assert_success
+    assert_output ""
 }
 
 # ===========================================================================
@@ -546,12 +806,243 @@ TMUX
     assert_equal "$result" ""
 }
 
-@test "should_exit_gracefully detects permission_denied" {
+@test "should_exit_gracefully ignores permission denials in continue mode" {
     echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": []}' > "$EXIT_SIGNALS_FILE"
     _mock_response_analysis true false false 0
     local result
     result=$(should_exit_gracefully)
-    assert_equal "$result" "permission_denied"
+    assert_equal "$result" ""
+}
+
+@test "should_exit_gracefully ignores stale permission denials in halt mode" {
+    echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": []}' > "$EXIT_SIGNALS_FILE"
+    jq -n \
+        --arg summary "Permission was denied in the prior loop." \
+        '{
+            analysis: {
+                has_permission_denials: true,
+                permission_denial_count: 1,
+                denied_commands: ["AskUserQuestion"],
+                work_summary: $summary,
+                exit_signal: false
+            }
+        }' > "$RESPONSE_ANALYSIS_FILE"
+    PERMISSION_DENIAL_MODE="halt"
+    set -e
+
+    run should_exit_gracefully
+    assert_success
+    assert_output ""
+}
+
+@test "should_exit_gracefully ignores permission denials in threshold mode" {
+    echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": []}' > "$EXIT_SIGNALS_FILE"
+    _mock_response_analysis true false false 0
+    PERMISSION_DENIAL_MODE="threshold"
+    local result
+    result=$(should_exit_gracefully)
+    assert_equal "$result" ""
+}
+
+@test "should_exit_gracefully ignores denied completion loops for completion_signals" {
+    echo '{"test_only_loops": [], "done_signals": [1], "completion_indicators": []}' > "$EXIT_SIGNALS_FILE"
+    PERMISSION_DENIAL_MODE="continue"
+    jq -n \
+        '{
+            loop_number: 2,
+            analysis: {
+                is_test_only: false,
+                has_progress: true,
+                has_completion_signal: true,
+                exit_signal: true,
+                has_permission_denials: true,
+                permission_denial_count: 1,
+                denied_commands: ["AskUserQuestion"],
+                work_summary: "Approval was required before implementation could continue."
+            }
+        }' > "$RESPONSE_ANALYSIS_FILE"
+    set -e
+
+    update_exit_signals "$RESPONSE_ANALYSIS_FILE" "$EXIT_SIGNALS_FILE"
+    consume_current_loop_permission_denial 2 > /dev/null 2>&1
+
+    run should_exit_gracefully
+    assert_success
+    assert_output ""
+}
+
+@test "should_exit_gracefully ignores denied completion loops for project_complete" {
+    echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": [1]}' > "$EXIT_SIGNALS_FILE"
+    PERMISSION_DENIAL_MODE="continue"
+    jq -n \
+        '{
+            loop_number: 2,
+            analysis: {
+                is_test_only: false,
+                has_progress: true,
+                has_completion_signal: true,
+                exit_signal: true,
+                has_permission_denials: true,
+                permission_denial_count: 1,
+                denied_commands: ["AskUserQuestion"],
+                work_summary: "Approval was required before implementation could continue."
+            }
+        }' > "$RESPONSE_ANALYSIS_FILE"
+    set -e
+
+    update_exit_signals "$RESPONSE_ANALYSIS_FILE" "$EXIT_SIGNALS_FILE"
+    consume_current_loop_permission_denial 2 > /dev/null 2>&1
+
+    run should_exit_gracefully
+    assert_success
+    assert_output ""
+}
+
+@test "should_exit_gracefully ignores denied completion loops for safety_circuit_breaker" {
+    echo '{"test_only_loops": [], "done_signals": [], "completion_indicators": [1,2,3,4]}' > "$EXIT_SIGNALS_FILE"
+    PERMISSION_DENIAL_MODE="continue"
+    jq -n \
+        '{
+            loop_number: 5,
+            analysis: {
+                is_test_only: false,
+                has_progress: true,
+                has_completion_signal: true,
+                exit_signal: true,
+                has_permission_denials: true,
+                permission_denial_count: 1,
+                denied_commands: ["AskUserQuestion"],
+                work_summary: "Approval was required before implementation could continue."
+            }
+        }' > "$RESPONSE_ANALYSIS_FILE"
+    set -e
+
+    update_exit_signals "$RESPONSE_ANALYSIS_FILE" "$EXIT_SIGNALS_FILE"
+    consume_current_loop_permission_denial 5 > /dev/null 2>&1
+
+    run should_exit_gracefully
+    assert_success
+    assert_output ""
+}
+
+@test "handle_permission_denial continues without resetting the session" {
+    echo '{"session_id":"ralph-session","created_at":"2026-01-01T00:00:00Z","last_used":"2026-01-01T00:00:00Z"}' \
+        > "$RALPH_SESSION_FILE"
+    echo "claude-session-123" > "$CLAUDE_SESSION_FILE"
+    echo "4" > "$CALL_COUNT_FILE"
+    set -e
+
+    handle_permission_denial 2 "Bash(node --version)" > /dev/null 2>&1
+
+    run echo "$PERMISSION_DENIAL_ACTION"
+    assert_success
+    assert_output "continue"
+
+    run cat "$CLAUDE_SESSION_FILE"
+    assert_output "claude-session-123"
+
+    run cat "$STATUS_FILE"
+    assert_output --partial '"status": "running"'
+
+    run cat "$STATUS_FILE"
+    assert_output --partial '"last_action": "permission_denied"'
+}
+
+@test "handle_permission_denial halts and resets the session in halt mode" {
+    echo '{"session_id":"ralph-session","created_at":"2026-01-01T00:00:00Z","last_used":"2026-01-01T00:00:00Z"}' \
+        > "$RALPH_SESSION_FILE"
+    echo "claude-session-123" > "$CLAUDE_SESSION_FILE"
+    echo "4" > "$CALL_COUNT_FILE"
+    PERMISSION_DENIAL_MODE="halt"
+    set -e
+
+    handle_permission_denial 2 "Bash(node --version)" > /dev/null 2>&1
+
+    run echo "$PERMISSION_DENIAL_ACTION"
+    assert_success
+    assert_output "halt"
+
+    [[ ! -f "$CLAUDE_SESSION_FILE" ]]
+
+    run cat "$STATUS_FILE"
+    assert_output --partial '"status": "halted"'
+}
+
+@test "consume_current_loop_permission_denial halts in the loop that produced the denial" {
+    echo '{"session_id":"ralph-session","created_at":"2026-01-01T00:00:00Z","last_used":"2026-01-01T00:00:00Z"}' \
+        > "$RALPH_SESSION_FILE"
+    echo "claude-session-123" > "$CLAUDE_SESSION_FILE"
+    echo "4" > "$CALL_COUNT_FILE"
+    jq -n \
+        --arg summary "Attempted to continue implementation work." \
+        '{
+            analysis: {
+                has_permission_denials: true,
+                permission_denial_count: 1,
+                denied_commands: ["AskUserQuestion"],
+                work_summary: $summary,
+                exit_signal: false
+            }
+        }' > "$RESPONSE_ANALYSIS_FILE"
+    PERMISSION_DENIAL_MODE="halt"
+    set -e
+
+    consume_current_loop_permission_denial 2 > /dev/null 2>&1
+
+    run echo "$PERMISSION_DENIAL_ACTION"
+    assert_success
+    assert_output "halt"
+
+    [[ ! -f "$CLAUDE_SESSION_FILE" ]]
+
+    run cat "$STATUS_FILE"
+    assert_output --partial '"status": "halted"'
+}
+
+@test "consume_current_loop_permission_denial clears denial fields and preserves the summary" {
+    echo "4" > "$CALL_COUNT_FILE"
+    jq -n \
+        --arg summary "Implemented the auth recovery flow." \
+        '{
+            analysis: {
+                has_completion_signal: true,
+                has_permission_denials: true,
+                permission_denial_count: 1,
+                denied_commands: ["AskUserQuestion"],
+                work_summary: $summary,
+                exit_signal: true
+            }
+        }' > "$RESPONSE_ANALYSIS_FILE"
+    PERMISSION_DENIAL_MODE="continue"
+    set -e
+
+    consume_current_loop_permission_denial 2 > /dev/null 2>&1
+
+    run echo "$PERMISSION_DENIAL_ACTION"
+    assert_success
+    assert_output "continue"
+
+    run cat "$RESPONSE_ANALYSIS_FILE"
+    assert_output --partial '"has_permission_denials": false'
+
+    run cat "$RESPONSE_ANALYSIS_FILE"
+    assert_output --partial '"permission_denial_count": 0'
+
+    run cat "$RESPONSE_ANALYSIS_FILE"
+    assert_output --partial '"denied_commands": []'
+
+    run cat "$RESPONSE_ANALYSIS_FILE"
+    assert_output --partial '"has_completion_signal": false'
+
+    run cat "$RESPONSE_ANALYSIS_FILE"
+    assert_output --partial '"exit_signal": false'
+
+    run cat "$RESPONSE_ANALYSIS_FILE"
+    assert_output --partial '"work_summary": "Implemented the auth recovery flow."'
+
+    run build_loop_context 3
+    assert_success
+    assert_output --partial "Previous: Implemented the auth recovery flow."
 }
 
 @test "should_exit_gracefully detects test_saturation" {

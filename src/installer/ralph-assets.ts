@@ -4,7 +4,7 @@ import { debug } from "../utils/logger.js";
 import { atomicWriteFile, exists } from "../utils/file-system.js";
 import { formatError } from "../utils/errors.js";
 import type { Platform } from "../platform/types.js";
-import { isTemplateCustomized } from "./template-files.js";
+import { isTemplateCustomized, renderRalphrcTemplate } from "./template-files.js";
 
 export interface RalphAssetInstallResult {
   updatedPaths: string[];
@@ -37,15 +37,19 @@ export async function installRalphAssets(
     dereference: false,
   });
 
-  // Copy .ralphrc from template (skip if user has customized it)
   const ralphrcDest = join(projectDir, ".ralph/.ralphrc");
-  if (!(await exists(ralphrcDest))) {
-    let ralphrcContent = await readFile(join(ralphDir, "templates/ralphrc.template"), "utf-8");
-    ralphrcContent = ralphrcContent.replace(
-      /PLATFORM_DRIVER="\$\{PLATFORM_DRIVER:-[^"]*\}"/,
-      `PLATFORM_DRIVER="\${PLATFORM_DRIVER:-${platform.id}}"`
-    );
-    await atomicWriteFile(ralphrcDest, ralphrcContent);
+  const ralphrcCustomized = await isTemplateCustomized(ralphrcDest, "RALPHRC", {
+    platformId: platform.id,
+  });
+  const renderedRalphrc = await renderRalphrcTemplate(platform.id);
+  let currentRalphrc = "";
+
+  if (await exists(ralphrcDest)) {
+    currentRalphrc = await readFile(ralphrcDest, "utf-8");
+  }
+
+  if (!ralphrcCustomized && currentRalphrc !== renderedRalphrc) {
+    await atomicWriteFile(ralphrcDest, renderedRalphrc);
   }
 
   // Copy Ralph loop and lib → .ralph/
@@ -99,6 +103,7 @@ export async function installRalphAssets(
       ".ralph/lib/",
       ...(!promptCustomized ? [".ralph/PROMPT.md"] : []),
       ...(!agentCustomized ? [".ralph/@AGENT.md"] : []),
+      ...(!ralphrcCustomized && currentRalphrc !== renderedRalphrc ? [".ralph/.ralphrc"] : []),
       ".ralph/RALPH-REFERENCE.md",
     ],
   };

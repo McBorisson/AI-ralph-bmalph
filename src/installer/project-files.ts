@@ -114,6 +114,7 @@ export async function previewInstall(
   const filesToCheck = [
     { path: ".ralph/PROMPT.md", isTemplate: true },
     { path: ".ralph/@AGENT.md", isTemplate: true },
+    { path: ".ralph/.ralphrc", isTemplate: true },
     { path: ".ralph/ralph_loop.sh", isTemplate: false },
     { path: CONFIG_FILE, isTemplate: false },
   ];
@@ -165,6 +166,7 @@ export async function previewUpgrade(
     { path: ".ralph/lib/", isDir: true },
     { path: ".ralph/PROMPT.md", isDir: false, templateName: "PROMPT.md" },
     { path: ".ralph/@AGENT.md", isDir: false, templateName: "AGENT.md" },
+    { path: ".ralph/.ralphrc", isDir: false, templateName: "RALPHRC" },
     { path: ".ralph/RALPH-REFERENCE.md", isDir: false },
     { path: ".gitignore", isDir: false },
   ];
@@ -182,7 +184,10 @@ export async function previewUpgrade(
   for (const { path: pathStr, templateName } of managedPaths) {
     const fullPath = join(projectDir, pathStr.replace(/\/$/, ""));
     if (await exists(fullPath)) {
-      if (templateName && (await isTemplateCustomized(fullPath, templateName))) {
+      if (
+        templateName &&
+        (await isTemplateCustomized(fullPath, templateName, { platformId: p.id }))
+      ) {
         wouldPreserve.push(pathStr);
       } else {
         wouldUpdate.push(pathStr);

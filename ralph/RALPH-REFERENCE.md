@@ -60,7 +60,8 @@ Environment variables > Ralph config file > script defaults
 | `MAX_CALLS_PER_HOUR` | `100` | Rate limit for API calls |
 | `CLAUDE_TIMEOUT_MINUTES` | `15` | Timeout per loop driver invocation |
 | `CLAUDE_OUTPUT_FORMAT` | `json` | Output format (json or text) |
-| `ALLOWED_TOOLS` | `Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)` | Comma-separated allowed tools |
+| `ALLOWED_TOOLS` | `Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash` | Claude Code only. Ignored by codex, cursor, and copilot |
+| `PERMISSION_DENIAL_MODE` | `continue` | How Ralph responds to permission denials: continue, halt, or threshold |
 | `SESSION_CONTINUITY` | `true` | Maintain context across loops |
 | `SESSION_EXPIRY_HOURS` | `24` | Session expiration time |
 | `RALPH_VERBOSE` | `false` | Enable verbose logging |
@@ -73,7 +74,7 @@ Environment variables > Ralph config file > script defaults
 
 ### Generation
 
-bmalph copies `ralphrc.template` to `.ralph/.ralphrc` during `bmalph init`. Existing `.ralph/.ralphrc` files are preserved during upgrades.
+bmalph copies `ralphrc.template` to `.ralph/.ralphrc` during `bmalph init`. Untouched managed configs are updated on upgrade, while customized `.ralph/.ralphrc` files are preserved.
 
 ---
 
@@ -156,8 +157,13 @@ The circuit breaker prevents runaway loops by detecting stagnation.
 
 When the active driver is denied permission to execute commands, Ralph:
 1. Detects permission denials from the JSON output
-2. Halts the loop with reason `permission_denied`
-3. Displays guidance to update `ALLOWED_TOOLS` in `.ralph/.ralphrc`
+2. Applies `PERMISSION_DENIAL_MODE` from `.ralph/.ralphrc`
+3. Keeps `last_action: permission_denied` visible in the status file and dashboard
+
+`PERMISSION_DENIAL_MODE` behavior:
+- `continue` keeps looping and logs the denial
+- `halt` stops immediately with reason `permission_denied`
+- `threshold` keeps looping until `CB_PERMISSION_DENIAL_THRESHOLD` opens the circuit breaker
 
 ### Auto-Recovery Cooldown
 
@@ -323,18 +329,20 @@ When using `--monitor` with `--live`, tmux creates a 3-pane layout:
 2. Fix the underlying issue causing the error
 3. Reset circuit breaker: `bash .ralph/ralph_loop.sh --reset-circuit`
 
-#### Permission denied halts loop
+#### Permission denied blocks progress
 
 **Symptoms:** "OPEN - permission_denied" message
 
 **Causes:**
 - The active driver denied permission to run commands
-- `ALLOWED_TOOLS` in `.ralph/.ralphrc` too restrictive
+- `ALLOWED_TOOLS` in `.ralph/.ralphrc` too restrictive for Claude Code
+- The active non-Claude driver rejected a tool under its native permission model
 
 **Solutions:**
-1. Update `ALLOWED_TOOLS` in `.ralph/.ralphrc` to include needed tools
-2. Reset circuit breaker: `bash .ralph/ralph_loop.sh --reset-circuit`
-3. Common tools: `Write,Read,Edit,Bash(git *),Bash(npm *),Bash(pytest)`
+1. For Claude Code, update `ALLOWED_TOOLS` in `.ralph/.ralphrc` to include needed tools
+2. For codex, cursor, and copilot, review the driver's native permission settings; `ALLOWED_TOOLS` is ignored
+3. If you want unattended behavior, keep `PERMISSION_DENIAL_MODE="continue"` in `.ralph/.ralphrc`
+4. Reset circuit breaker if needed: `bash .ralph/ralph_loop.sh --reset-circuit`
 
 #### Session expires mid-project
 

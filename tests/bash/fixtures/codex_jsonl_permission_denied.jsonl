@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"codex-thread-permission-1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","text":"Permission denied: shell command requires approval before it can run.\n\n---RALPH_STATUS---\nSTATUS: BLOCKED\nEXIT_SIGNAL: false\n---END_RALPH_STATUS---"}}

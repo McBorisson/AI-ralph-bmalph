@@ -34,6 +34,17 @@ driver_valid_tools() {
     )
 }
 
+driver_supports_tool_allowlist() {
+    return 1
+}
+
+driver_permission_denial_help() {
+    echo "  - $DRIVER_DISPLAY_NAME uses its native sandbox and approval model."
+    echo "  - ALLOWED_TOOLS in $RALPHRC_FILE is ignored for this driver."
+    echo "  - Ralph already runs Codex with --sandbox workspace-write."
+    echo "  - Review Codex approval settings, then restart the loop."
+}
+
 # Build Codex CLI command
 # Codex uses: codex exec [--resume <id>] --json "prompt"
 driver_build_command() {

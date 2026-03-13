@@ -48,6 +48,17 @@ driver_valid_tools() {
     )
 }
 
+driver_supports_tool_allowlist() {
+    return 1
+}
+
+driver_permission_denial_help() {
+    echo "  - $DRIVER_DISPLAY_NAME uses its native permission model."
+    echo "  - ALLOWED_TOOLS in $RALPHRC_FILE is ignored for this driver."
+    echo "  - Ralph already runs Cursor with --force."
+    echo "  - Review Cursor permissions or approval settings, then restart the loop."
+}
+
 driver_build_command() {
     local prompt_file=$1
     local loop_context=$2

@@ -284,6 +284,7 @@ teardown() {
 # ===========================================================================
 
 @test "permission denial threshold trips breaker" {
+    PERMISSION_DENIAL_MODE="threshold"
     _mock_response_analysis true false false 0
 
     _quiet_record 1 0 false 100
@@ -296,7 +297,22 @@ teardown() {
     assert_output --partial "Permission denied"
 }
 
+@test "permission denials do not trip breaker in continue mode" {
+    PERMISSION_DENIAL_MODE="continue"
+    _mock_response_analysis true false false 0
+
+    _quiet_record 1 0 false 100
+    _quiet_record 2 0 false 100
+
+    run get_circuit_state
+    assert_output "HALF_OPEN"
+
+    run jq -r '.consecutive_permission_denials' "$CB_STATE_FILE"
+    assert_output "0"
+}
+
 @test "permission denials reset when loop has no denials" {
+    PERMISSION_DENIAL_MODE="threshold"
     _mock_response_analysis true false false 0
     _quiet_record 1 0 false 100  # denial 1
 

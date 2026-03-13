@@ -38,6 +38,17 @@ driver_valid_tools() {
     )
 }
 
+driver_supports_tool_allowlist() {
+    return 1
+}
+
+driver_permission_denial_help() {
+    echo "  - $DRIVER_DISPLAY_NAME uses its own autonomy and approval controls."
+    echo "  - ALLOWED_TOOLS in $RALPHRC_FILE is ignored for this driver."
+    echo "  - Ralph already runs Copilot with --no-ask-user for unattended mode."
+    echo "  - Review Copilot CLI permissions, then restart the loop."
+}
+
 # Build Copilot CLI command
 # Context is prepended to the prompt (same pattern as Codex driver).
 # Uses --autopilot --yolo for autonomous mode, -s to strip stats, -p for prompt.
