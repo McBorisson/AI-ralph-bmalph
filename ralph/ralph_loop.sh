@@ -40,6 +40,8 @@ _env_MAX_CALLS_PER_HOUR="${MAX_CALLS_PER_HOUR:-}"
 _env_CLAUDE_TIMEOUT_MINUTES="${CLAUDE_TIMEOUT_MINUTES:-}"
 _env_CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-}"
 _env_CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-}"
+_env_has_CLAUDE_PERMISSION_MODE="${CLAUDE_PERMISSION_MODE+x}"
+_env_CLAUDE_PERMISSION_MODE="${CLAUDE_PERMISSION_MODE:-}"
 _env_CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-}"
 _env_CLAUDE_SESSION_EXPIRY_HOURS="${CLAUDE_SESSION_EXPIRY_HOURS:-}"
 _env_ALLOWED_TOOLS="${ALLOWED_TOOLS:-}"
@@ -77,6 +79,7 @@ DEFAULT_PERMISSION_DENIAL_MODE="continue"
 # Modern Claude CLI configuration (Phase 1.1)
 CLAUDE_OUTPUT_FORMAT="${CLAUDE_OUTPUT_FORMAT:-json}"
 CLAUDE_ALLOWED_TOOLS="${CLAUDE_ALLOWED_TOOLS:-$DEFAULT_CLAUDE_ALLOWED_TOOLS}"
+CLAUDE_PERMISSION_MODE="${CLAUDE_PERMISSION_MODE:-auto}"
 CLAUDE_USE_CONTINUE="${CLAUDE_USE_CONTINUE:-true}"
 PERMISSION_DENIAL_MODE="${PERMISSION_DENIAL_MODE:-$DEFAULT_PERMISSION_DENIAL_MODE}"
 CLAUDE_SESSION_FILE="$RALPH_DIR/.claude_session_id" # Session ID persistence file
@@ -158,6 +161,7 @@ resolve_ralphrc_file() {
 #   - MAX_CALLS_PER_HOUR
 #   - CLAUDE_TIMEOUT_MINUTES
 #   - CLAUDE_OUTPUT_FORMAT
+#   - CLAUDE_PERMISSION_MODE
 #   - ALLOWED_TOOLS (mapped to CLAUDE_ALLOWED_TOOLS for Claude Code only)
 #   - PERMISSION_DENIAL_MODE
 #   - SESSION_CONTINUITY (mapped to CLAUDE_USE_CONTINUE)
@@ -203,6 +207,9 @@ load_ralphrc() {
     [[ -n "$_env_CLAUDE_TIMEOUT_MINUTES" ]] && CLAUDE_TIMEOUT_MINUTES="$_env_CLAUDE_TIMEOUT_MINUTES"
     [[ -n "$_env_CLAUDE_OUTPUT_FORMAT" ]] && CLAUDE_OUTPUT_FORMAT="$_env_CLAUDE_OUTPUT_FORMAT"
     [[ -n "$_env_CLAUDE_ALLOWED_TOOLS" ]] && CLAUDE_ALLOWED_TOOLS="$_env_CLAUDE_ALLOWED_TOOLS"
+    if [[ "$_env_has_CLAUDE_PERMISSION_MODE" == "x" ]]; then
+        CLAUDE_PERMISSION_MODE="$_env_CLAUDE_PERMISSION_MODE"
+    fi
     [[ -n "$_env_CLAUDE_USE_CONTINUE" ]] && CLAUDE_USE_CONTINUE="$_env_CLAUDE_USE_CONTINUE"
     [[ -n "$_env_CLAUDE_SESSION_EXPIRY_HOURS" ]] && CLAUDE_SESSION_EXPIRY_HOURS="$_env_CLAUDE_SESSION_EXPIRY_HOURS"
     [[ -n "$_env_PERMISSION_DENIAL_MODE" ]] && PERMISSION_DENIAL_MODE="$_env_PERMISSION_DENIAL_MODE"
@@ -229,6 +236,7 @@ load_ralphrc() {
     [[ -n "$_env_CB_COOLDOWN_MINUTES" ]] && CB_COOLDOWN_MINUTES="$_env_CB_COOLDOWN_MINUTES"
     [[ -n "$_env_CB_AUTO_RESET" ]] && CB_AUTO_RESET="$_env_CB_AUTO_RESET"
 
+    normalize_claude_permission_mode
     RALPHRC_FILE="$config_file"
     RALPHRC_LOADED=true
     return 0
@@ -241,6 +249,7 @@ driver_supports_tool_allowlist() {
 driver_permission_denial_help() {
     echo "  - Review the active driver's permission or approval settings."
     echo "  - ALLOWED_TOOLS in $RALPHRC_FILE only applies to the Claude Code driver."
+    echo "  - Keep CLAUDE_PERMISSION_MODE=auto for unattended Claude Code loops."
     echo "  - After updating permissions, reset the session and restart the loop."
 }
 
@@ -514,6 +523,27 @@ validate_permission_denial_mode() {
         *)
             echo "Error: Invalid PERMISSION_DENIAL_MODE: '$mode'"
             echo "Valid modes: continue halt threshold"
+            return 1
+            ;;
+    esac
+}
+
+normalize_claude_permission_mode() {
+    if [[ -z "${CLAUDE_PERMISSION_MODE:-}" ]]; then
+        CLAUDE_PERMISSION_MODE="auto"
+    fi
+}
+
+validate_claude_permission_mode() {
+    local mode=$1
+
+    case "$mode" in
+        auto|acceptEdits|bypassPermissions|default|dontAsk|plan)
+            return 0
+            ;;
+        *)
+            echo "Error: Invalid CLAUDE_PERMISSION_MODE: '$mode'"
+            echo "Valid modes: auto acceptEdits bypassPermissions default dontAsk plan"
             return 1
             ;;
     esac
@@ -1631,6 +1661,14 @@ main() {
 
     if ! validate_permission_denial_mode "$PERMISSION_DENIAL_MODE"; then
         exit 1
+    fi
+
+    if [[ "$(driver_name)" == "claude-code" ]]; then
+        normalize_claude_permission_mode
+
+        if ! validate_claude_permission_mode "$CLAUDE_PERMISSION_MODE"; then
+            exit 1
+        fi
     fi
 
     if driver_supports_tool_allowlist; then

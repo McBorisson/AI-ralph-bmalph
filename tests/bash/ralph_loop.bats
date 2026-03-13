@@ -38,6 +38,7 @@ setup() {
     CLAUDE_TIMEOUT_MINUTES=15
     CLAUDE_OUTPUT_FORMAT="json"
     CLAUDE_ALLOWED_TOOLS="Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"
+    CLAUDE_PERMISSION_MODE="auto"
     CLAUDE_USE_CONTINUE="true"
     CLAUDE_SESSION_EXPIRY_HOURS=24
     PERMISSION_DENIAL_MODE="continue"
@@ -54,6 +55,8 @@ setup() {
     _env_CLAUDE_TIMEOUT_MINUTES=""
     _env_CLAUDE_OUTPUT_FORMAT=""
     _env_CLAUDE_ALLOWED_TOOLS=""
+    _env_CLAUDE_PERMISSION_MODE=""
+    _env_has_CLAUDE_PERMISSION_MODE=""
     _env_CLAUDE_USE_CONTINUE=""
     _env_CLAUDE_SESSION_EXPIRY_HOURS=""
     _env_ALLOWED_TOOLS=""
@@ -70,6 +73,7 @@ setup() {
     _cli_CLAUDE_TIMEOUT_MINUTES=""
     _cli_CLAUDE_OUTPUT_FORMAT=""
     _cli_CLAUDE_ALLOWED_TOOLS=""
+    _cli_CLAUDE_PERMISSION_MODE=""
     _cli_CLAUDE_USE_CONTINUE=""
     _cli_CLAUDE_SESSION_EXPIRY_HOURS=""
     _cli_VERBOSE_PROGRESS=""
@@ -113,6 +117,18 @@ teardown() {
     echo 'PERMISSION_DENIAL_MODE="threshold"' > "$RALPHRC_FILE"
     load_ralphrc
     assert_equal "$PERMISSION_DENIAL_MODE" "threshold"
+}
+
+@test "load_ralphrc applies Claude permission mode override" {
+    echo 'CLAUDE_PERMISSION_MODE="dontAsk"' > "$RALPHRC_FILE"
+    load_ralphrc
+    assert_equal "$CLAUDE_PERMISSION_MODE" "dontAsk"
+}
+
+@test "load_ralphrc normalizes blank Claude permission mode to auto" {
+    echo 'CLAUDE_PERMISSION_MODE=""' > "$RALPHRC_FILE"
+    load_ralphrc
+    assert_equal "$CLAUDE_PERMISSION_MODE" "auto"
 }
 
 @test "load_ralphrc: env vars take precedence over .ralphrc" {
@@ -183,6 +199,66 @@ teardown() {
     load_ralphrc
 
     assert_equal "$CLAUDE_ALLOWED_TOOLS" "Read,Edit"
+}
+
+@test "load_ralphrc: internal CLAUDE_PERMISSION_MODE env override still works" {
+    echo 'CLAUDE_PERMISSION_MODE="plan"' > "$RALPHRC_FILE"
+    _env_CLAUDE_PERMISSION_MODE="dontAsk"
+    _env_has_CLAUDE_PERMISSION_MODE="x"
+    CLAUDE_PERMISSION_MODE="dontAsk"
+
+    load_ralphrc
+
+    [[ "$CLAUDE_PERMISSION_MODE" == "dontAsk" ]]
+}
+
+@test "load_ralphrc: explicit empty CLAUDE_PERMISSION_MODE env override resets to auto at startup" {
+    local isolated_ralph_dir
+    isolated_ralph_dir="$(mktemp -d)"
+    printf 'CLAUDE_PERMISSION_MODE="plan"\n' > "$isolated_ralph_dir/.ralphrc"
+
+    run bash -lc "
+        export RALPH_DIR='$isolated_ralph_dir'
+        export CLAUDE_PERMISSION_MODE=''
+        source '$PROJECT_ROOT/ralph/ralph_loop.sh' >/dev/null 2>&1
+        set +e
+        load_ralphrc >/dev/null 2>&1
+        printf '%s' \"\$CLAUDE_PERMISSION_MODE\"
+    "
+
+    rm -rf "$isolated_ralph_dir"
+
+    [[ "$status" -eq 0 && "$output" == "auto" ]]
+}
+
+@test "load_ralphrc: unset CLAUDE_PERMISSION_MODE env leaves config in place at startup" {
+    local isolated_ralph_dir
+    isolated_ralph_dir="$(mktemp -d)"
+    printf 'CLAUDE_PERMISSION_MODE="plan"\n' > "$isolated_ralph_dir/.ralphrc"
+
+    run bash -lc "
+        export RALPH_DIR='$isolated_ralph_dir'
+        unset CLAUDE_PERMISSION_MODE
+        source '$PROJECT_ROOT/ralph/ralph_loop.sh' >/dev/null 2>&1
+        set +e
+        load_ralphrc >/dev/null 2>&1
+        printf '%s' \"\$CLAUDE_PERMISSION_MODE\"
+    "
+
+    rm -rf "$isolated_ralph_dir"
+
+    [[ "$status" -eq 0 && "$output" == "plan" ]]
+}
+
+@test "load_ralphrc: internal CLAUDE_PERMISSION_MODE env override beats blank config" {
+    echo 'CLAUDE_PERMISSION_MODE=""' > "$RALPHRC_FILE"
+    _env_CLAUDE_PERMISSION_MODE="dontAsk"
+    _env_has_CLAUDE_PERMISSION_MODE="x"
+    CLAUDE_PERMISSION_MODE="dontAsk"
+
+    load_ralphrc
+
+    [[ "$CLAUDE_PERMISSION_MODE" == "dontAsk" ]]
 }
 
 @test "load_ralphrc: internal CLAUDE_USE_CONTINUE env override still works" {
@@ -414,6 +490,26 @@ teardown() {
     run warn_if_allowed_tools_ignored
     assert_success
     assert_output ""
+}
+
+# ===========================================================================
+# validate_claude_permission_mode
+# ===========================================================================
+
+@test "validate_claude_permission_mode accepts supported modes" {
+    local modes=(auto acceptEdits bypassPermissions default dontAsk plan)
+
+    for mode in "${modes[@]}"; do
+        run validate_claude_permission_mode "$mode"
+        assert_success
+    done
+}
+
+@test "validate_claude_permission_mode rejects invalid mode" {
+    run validate_claude_permission_mode "askLater"
+    assert_failure
+    assert_output --partial "Invalid CLAUDE_PERMISSION_MODE"
+    assert_output --partial "Valid modes: auto acceptEdits bypassPermissions default dontAsk plan"
 }
 
 # ===========================================================================

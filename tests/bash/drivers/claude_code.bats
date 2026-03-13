@@ -66,6 +66,19 @@ teardown() {
     [[ "$found_git" == "true" ]]
 }
 
+@test "driver_permission_denial_help distinguishes permission mode from allowed tools" {
+    RALPHRC_FILE="$RALPH_DIR/.ralphrc"
+
+    run driver_permission_denial_help
+
+    assert_success
+    assert_output --partial "CLAUDE_PERMISSION_MODE=auto"
+    assert_output --partial "ALLOWED_TOOLS"
+    assert_output --partial "will not fix it"
+    assert_output --partial "--reset-session"
+    assert_output --partial "bmalph run"
+}
+
 # ===========================================================================
 # driver_build_command
 # ===========================================================================
@@ -93,6 +106,7 @@ teardown() {
 
     export CLAUDE_OUTPUT_FORMAT="json"
     export CLAUDE_ALLOWED_TOOLS=""
+    export CLAUDE_PERMISSION_MODE=""
     export CLAUDE_USE_CONTINUE="false"
 
     driver_build_command "$prompt_file" "" ""
@@ -101,12 +115,43 @@ teardown() {
     [[ "$args_str" =~ "--output-format json" ]]
 }
 
+@test "driver_build_command defaults permission mode to auto" {
+    local prompt_file="$RALPH_DIR/prompt.md"
+    echo "Test prompt" > "$prompt_file"
+
+    export CLAUDE_OUTPUT_FORMAT=""
+    export CLAUDE_ALLOWED_TOOLS=""
+    export CLAUDE_PERMISSION_MODE=""
+    export CLAUDE_USE_CONTINUE="false"
+
+    driver_build_command "$prompt_file" "" ""
+
+    local args_str="${CLAUDE_CMD_ARGS[*]}"
+    [[ "$args_str" =~ "--permission-mode auto" ]]
+}
+
+@test "driver_build_command passes configured permission mode" {
+    local prompt_file="$RALPH_DIR/prompt.md"
+    echo "Test prompt" > "$prompt_file"
+
+    export CLAUDE_OUTPUT_FORMAT=""
+    export CLAUDE_ALLOWED_TOOLS=""
+    export CLAUDE_PERMISSION_MODE="dontAsk"
+    export CLAUDE_USE_CONTINUE="false"
+
+    driver_build_command "$prompt_file" "" ""
+
+    local args_str="${CLAUDE_CMD_ARGS[*]}"
+    [[ "$args_str" =~ "--permission-mode dontAsk" ]]
+}
+
 @test "driver_build_command adds allowed tools" {
     local prompt_file="$RALPH_DIR/prompt.md"
     echo "Test prompt" > "$prompt_file"
 
     export CLAUDE_OUTPUT_FORMAT=""
     export CLAUDE_ALLOWED_TOOLS="Write,Read,Bash"
+    export CLAUDE_PERMISSION_MODE=""
     export CLAUDE_USE_CONTINUE="false"
 
     driver_build_command "$prompt_file" "" ""
@@ -124,6 +169,7 @@ teardown() {
 
     export CLAUDE_OUTPUT_FORMAT=""
     export CLAUDE_ALLOWED_TOOLS=""
+    export CLAUDE_PERMISSION_MODE=""
     export CLAUDE_USE_CONTINUE="true"
 
     driver_build_command "$prompt_file" "" "session-abc-123"
@@ -138,6 +184,7 @@ teardown() {
 
     export CLAUDE_OUTPUT_FORMAT=""
     export CLAUDE_ALLOWED_TOOLS=""
+    export CLAUDE_PERMISSION_MODE=""
     export CLAUDE_USE_CONTINUE="true"
 
     driver_build_command "$prompt_file" "" ""
@@ -152,6 +199,7 @@ teardown() {
 
     export CLAUDE_OUTPUT_FORMAT=""
     export CLAUDE_ALLOWED_TOOLS=""
+    export CLAUDE_PERMISSION_MODE=""
     export CLAUDE_USE_CONTINUE="false"
 
     driver_build_command "$prompt_file" "" "session-abc-123"
@@ -166,6 +214,7 @@ teardown() {
 
     export CLAUDE_OUTPUT_FORMAT=""
     export CLAUDE_ALLOWED_TOOLS=""
+    export CLAUDE_PERMISSION_MODE=""
     export CLAUDE_USE_CONTINUE="false"
 
     driver_build_command "$prompt_file" "Loop 3 context: 2 files changed" ""

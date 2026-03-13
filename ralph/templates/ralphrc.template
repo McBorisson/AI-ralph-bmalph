@@ -45,6 +45,10 @@ CLAUDE_OUTPUT_FORMAT="json"
 # Opt in to interactive pauses by adding AskUserQuestion manually.
 ALLOWED_TOOLS="Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"
 
+# Permission mode for Claude Code CLI (default: auto)
+# Options: auto, acceptEdits, bypassPermissions, default, dontAsk, plan
+CLAUDE_PERMISSION_MODE="auto"
+
 # How Ralph responds when a driver reports permission denials:
 # - continue: log the denial and keep looping (default for unattended mode)
 # - halt: stop immediately and show recovery guidance

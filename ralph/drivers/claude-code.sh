@@ -54,8 +54,10 @@ driver_supports_tool_allowlist() {
 }
 
 driver_permission_denial_help() {
-    echo "  1. Edit $RALPHRC_FILE and update ALLOWED_TOOLS to include the required tools"
-    echo "  2. Common patterns:"
+    echo "  1. Edit $RALPHRC_FILE and keep CLAUDE_PERMISSION_MODE=auto for unattended Claude Code loops"
+    echo "  2. If Claude was denied on an interactive approval step, ALLOWED_TOOLS will not fix it"
+    echo "  3. If Claude was denied on a normal tool, update ALLOWED_TOOLS to include the required tools"
+    echo "  4. Common ALLOWED_TOOLS patterns:"
     echo "     - Bash                - All shell commands"
     echo "     - Bash(node *)        - All Node.js commands"
     echo "     - Bash(npm *)         - All npm commands"
@@ -77,6 +79,7 @@ driver_build_command() {
     local prompt_file=$1
     local loop_context=$2
     local session_id=$3
+    local resolved_permission_mode="${CLAUDE_PERMISSION_MODE:-auto}"
 
     # Note: We do NOT use --dangerously-skip-permissions here. Tool permissions
     # are controlled via --allowedTools from CLAUDE_ALLOWED_TOOLS in .ralphrc.
@@ -92,6 +95,9 @@ driver_build_command() {
     if [[ "$CLAUDE_OUTPUT_FORMAT" == "json" ]]; then
         CLAUDE_CMD_ARGS+=("--output-format" "json")
     fi
+
+    # Prevent interactive approval flows from blocking unattended -p loops.
+    CLAUDE_CMD_ARGS+=("--permission-mode" "$resolved_permission_mode")
 
     # Allowed tools
     if [[ -n "$CLAUDE_ALLOWED_TOOLS" ]]; then

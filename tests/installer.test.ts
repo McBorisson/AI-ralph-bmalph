@@ -459,6 +459,7 @@ describe("installer", () => {
       const content = await readFile(join(testDir, ".ralph/.ralphrc"), "utf-8");
       expect(content).toContain("MAX_CALLS_PER_HOUR");
       expect(content).toContain("ALLOWED_TOOLS");
+      expect(content).toContain('CLAUDE_PERMISSION_MODE="auto"');
       expect(content).toContain('PERMISSION_DENIAL_MODE="continue"');
       expect(content).toContain(
         'ALLOWED_TOOLS="Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"'
@@ -482,10 +483,29 @@ describe("installer", () => {
       const result = await copyBundledAssets(testDir);
 
       const content = await readFile(join(testDir, ".ralph/.ralphrc"), "utf-8");
+      expect(content).toContain('CLAUDE_PERMISSION_MODE="auto"');
       expect(content).toContain('PERMISSION_DENIAL_MODE="continue"');
       expect(content).toContain(
         'ALLOWED_TOOLS="Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"'
       );
+      expect(result.updatedPaths).toContain(".ralph/.ralphrc");
+    });
+
+    it("updates previous managed .ralphrc on upgrade", async () => {
+      await copyBundledAssets(testDir);
+
+      const currentContent = await readFile(join(testDir, ".ralph/.ralphrc"), "utf-8");
+      const previousManagedContent = currentContent.replace(
+        '# Permission mode for Claude Code CLI (default: auto)\n# Options: auto, acceptEdits, bypassPermissions, default, dontAsk, plan\nCLAUDE_PERMISSION_MODE="auto"\n\n',
+        ""
+      );
+      expect(previousManagedContent).not.toBe(currentContent);
+      await writeFile(join(testDir, ".ralph/.ralphrc"), previousManagedContent);
+
+      const result = await copyBundledAssets(testDir);
+
+      const updatedContent = await readFile(join(testDir, ".ralph/.ralphrc"), "utf-8");
+      expect(updatedContent).toContain('CLAUDE_PERMISSION_MODE="auto"');
       expect(result.updatedPaths).toContain(".ralph/.ralphrc");
     });
 
@@ -1331,6 +1351,23 @@ Old stale content with /tea agent reference.
     it("classifies legacy managed .ralphrc as wouldUpdate", async () => {
       await mkdir(join(testDir, ".ralph"), { recursive: true });
       await writeFile(join(testDir, ".ralph/.ralphrc"), LEGACY_RALPHRC);
+
+      const result = await previewUpgrade(testDir);
+
+      expect(result.wouldUpdate).toContain(".ralph/.ralphrc");
+      expect(result.wouldPreserve).not.toContain(".ralph/.ralphrc");
+    });
+
+    it("classifies previous managed .ralphrc as wouldUpdate", async () => {
+      await installProject(testDir);
+
+      const currentContent = await readFile(join(testDir, ".ralph/.ralphrc"), "utf-8");
+      const previousManagedContent = currentContent.replace(
+        '# Permission mode for Claude Code CLI (default: auto)\n# Options: auto, acceptEdits, bypassPermissions, default, dontAsk, plan\nCLAUDE_PERMISSION_MODE="auto"\n\n',
+        ""
+      );
+      expect(previousManagedContent).not.toBe(currentContent);
+      await writeFile(join(testDir, ".ralph/.ralphrc"), previousManagedContent);
 
       const result = await previewUpgrade(testDir);
 

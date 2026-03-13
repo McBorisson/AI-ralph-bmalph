@@ -61,6 +61,7 @@ Environment variables > Ralph config file > script defaults
 | `CLAUDE_TIMEOUT_MINUTES` | `15` | Timeout per loop driver invocation |
 | `CLAUDE_OUTPUT_FORMAT` | `json` | Output format (json or text) |
 | `ALLOWED_TOOLS` | `Write,Read,Edit,MultiEdit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash` | Claude Code only. Ignored by codex, cursor, and copilot |
+| `CLAUDE_PERMISSION_MODE` | `auto` | Claude Code only. Prevents interactive approval workflows from blocking unattended loops |
 | `PERMISSION_DENIAL_MODE` | `continue` | How Ralph responds to permission denials: continue, halt, or threshold |
 | `SESSION_CONTINUITY` | `true` | Maintain context across loops |
 | `SESSION_EXPIRY_HOURS` | `24` | Session expiration time |
@@ -340,9 +341,10 @@ When using `--monitor` with `--live`, tmux creates a 3-pane layout:
 
 **Solutions:**
 1. For Claude Code, update `ALLOWED_TOOLS` in `.ralph/.ralphrc` to include needed tools
-2. For codex, cursor, and copilot, review the driver's native permission settings; `ALLOWED_TOOLS` is ignored
-3. If you want unattended behavior, keep `PERMISSION_DENIAL_MODE="continue"` in `.ralph/.ralphrc`
-4. Reset circuit breaker if needed: `bash .ralph/ralph_loop.sh --reset-circuit`
+2. For Claude Code unattended loops, keep `CLAUDE_PERMISSION_MODE="auto"` in `.ralph/.ralphrc`
+3. For codex, cursor, and copilot, review the driver's native permission settings; `ALLOWED_TOOLS` is ignored
+4. If you want unattended behavior, keep `PERMISSION_DENIAL_MODE="continue"` in `.ralph/.ralphrc`
+5. Reset circuit breaker if needed: `bash .ralph/ralph_loop.sh --reset-circuit`
 
 #### Session expires mid-project
 
