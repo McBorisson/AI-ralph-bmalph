@@ -155,11 +155,21 @@ export function validateCircuitBreakerState(data: unknown): CircuitBreakerState 
 }
 
 // Ralph session (from .ralph/.ralph_session)
-export interface RalphSession {
+export interface ActiveRalphSession {
+  kind: "active";
   session_id: string;
   created_at: string;
   last_used?: string;
 }
+
+export interface InactiveRalphSession {
+  kind: "inactive";
+  session_id: "";
+  reset_at?: string;
+  reset_reason?: string;
+}
+
+export type RalphSession = ActiveRalphSession | InactiveRalphSession;
 
 export function validateRalphSession(data: unknown): RalphSession {
   assertObject(data, "ralphSession");
@@ -168,13 +178,30 @@ export function validateRalphSession(data: unknown): RalphSession {
     throw new Error("ralphSession.session_id must be a string");
   }
 
+  if (data.session_id === "") {
+    const reset_at = typeof data.reset_at === "string" ? data.reset_at : undefined;
+    const reset_reason = typeof data.reset_reason === "string" ? data.reset_reason : undefined;
+
+    return {
+      kind: "inactive",
+      session_id: "",
+      reset_at,
+      reset_reason,
+    };
+  }
+
   if (typeof data.created_at !== "string") {
     throw new Error("ralphSession.created_at must be a string");
+  }
+
+  if (Number.isNaN(new Date(data.created_at).getTime())) {
+    throw new Error("ralphSession.created_at must be a valid timestamp");
   }
 
   const last_used = typeof data.last_used === "string" ? data.last_used : undefined;
 
   return {
+    kind: "active",
     session_id: data.session_id,
     created_at: data.created_at,
     last_used,

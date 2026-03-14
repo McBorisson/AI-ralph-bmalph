@@ -258,7 +258,7 @@ describe("doctor-runtime-checks behavior", () => {
     expect(result.detail).toBe("corrupt state file");
   });
 
-  it("treats unparsable session timestamps as invalid", async () => {
+  it("treats unparsable active session timestamps as corrupt", async () => {
     testDir = makeTmpDir();
     const ralphDir = join(testDir, ".ralph");
     await mkdir(ralphDir, { recursive: true });
@@ -270,6 +270,6 @@ describe("doctor-runtime-checks behavior", () => {
     const result = await checkRalphSession(testDir);
 
     expect(result.passed).toBe(false);
-    expect(result.detail).toBe("invalid timestamp");
+    expect(result.detail).toBe("corrupt session file");
   });
 });

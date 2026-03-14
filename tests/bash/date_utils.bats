@@ -107,6 +107,21 @@ teardown() {
 }
 
 # ===========================================================================
+# parse_iso_to_epoch_strict
+# ===========================================================================
+
+@test "parse_iso_to_epoch_strict handles millisecond ISO timestamps" {
+    run parse_iso_to_epoch_strict "2025-01-01T00:00:00.000Z"
+    assert_success
+    assert_output --regexp '^[0-9]+$'
+}
+
+@test "parse_iso_to_epoch_strict fails for invalid timestamps" {
+    run parse_iso_to_epoch_strict "not-a-date"
+    assert_failure
+}
+
+# ===========================================================================
 # get_next_hour_time
 # ===========================================================================
 

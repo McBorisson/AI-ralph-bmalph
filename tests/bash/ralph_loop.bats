@@ -727,6 +727,74 @@ EOF
     assert_equal "$saved" "cursor-session-123"
 }
 
+@test "save_claude_session creates a fresh active Ralph session for a new driver session" {
+    local output_file="$RALPH_DIR/test_output.json"
+    echo '{"metadata": {"session_id": "ses-new-456"}}' > "$output_file"
+    echo '{"session_id":"","reset_at":"2026-03-13T09:10:53+00:00","reset_reason":"permission_denied"}' > "$RALPH_SESSION_FILE"
+
+    save_claude_session "$output_file"
+
+    local session_id
+    session_id=$(jq -r '.session_id' "$RALPH_SESSION_FILE")
+    assert_equal "$session_id" "ses-new-456"
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    [[ "$created_at" != "null" && -n "$created_at" ]]
+
+    local last_used
+    last_used=$(jq -r '.last_used' "$RALPH_SESSION_FILE")
+    assert_equal "$last_used" "$created_at"
+}
+
+@test "save_claude_session preserves created_at when the driver session matches the active Ralph session" {
+    local output_file="$RALPH_DIR/test_output.json"
+    echo '{"metadata": {"session_id": "ses-abc-123"}}' > "$output_file"
+    echo '{"session_id":"ses-abc-123","created_at":"2026-01-01T00:00:00Z","last_used":"2026-01-01T00:05:00Z"}' > "$RALPH_SESSION_FILE"
+
+    save_claude_session "$output_file"
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    assert_equal "$created_at" "2026-01-01T00:00:00Z"
+
+    local last_used
+    last_used=$(jq -r '.last_used' "$RALPH_SESSION_FILE")
+    [[ "$last_used" != "2026-01-01T00:05:00Z" ]]
+}
+
+@test "save_claude_session rewrites a matching active session when created_at is invalid" {
+    local output_file="$RALPH_DIR/test_output.json"
+    echo '{"metadata": {"session_id": "ses-abc-123"}}' > "$output_file"
+    echo '{"session_id":"ses-abc-123","created_at":"not-a-date","last_used":"2026-01-01T00:05:00Z"}' > "$RALPH_SESSION_FILE"
+
+    save_claude_session "$output_file"
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    [[ "$created_at" != "not-a-date" && -n "$created_at" ]]
+
+    local last_used
+    last_used=$(jq -r '.last_used' "$RALPH_SESSION_FILE")
+    assert_equal "$last_used" "$created_at"
+}
+
+@test "save_claude_session rewrites a matching active session when created_at is in the future" {
+    local output_file="$RALPH_DIR/test_output.json"
+    echo '{"metadata": {"session_id": "ses-abc-123"}}' > "$output_file"
+    echo '{"session_id":"ses-abc-123","created_at":"2999-01-01T00:00:00Z","last_used":"2026-01-01T00:05:00Z"}' > "$RALPH_SESSION_FILE"
+
+    save_claude_session "$output_file"
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    [[ "$created_at" != "2999-01-01T00:00:00Z" && -n "$created_at" ]]
+
+    local last_used
+    last_used=$(jq -r '.last_used' "$RALPH_SESSION_FILE")
+    assert_equal "$last_used" "$created_at"
+}
+
 @test "save_claude_session does nothing when output file missing" {
     rm -f "$CLAUDE_SESSION_FILE"
     save_claude_session "$RALPH_DIR/nonexistent.json"
@@ -757,6 +825,88 @@ EOF
     local reason
     reason=$(jq -r '.reset_reason' "$RALPH_SESSION_FILE")
     assert_equal "$reason" "circuit_breaker_open"
+}
+
+@test "reset_session writes an inactive payload without active-session timestamps" {
+    reset_session "permission_denied"
+
+    local session_id
+    session_id=$(jq -r '.session_id' "$RALPH_SESSION_FILE")
+    assert_equal "$session_id" ""
+
+    local has_created_at
+    has_created_at=$(jq 'has("created_at")' "$RALPH_SESSION_FILE")
+    assert_equal "$has_created_at" "false"
+
+    local has_last_used
+    has_last_used=$(jq 'has("last_used")' "$RALPH_SESSION_FILE")
+    assert_equal "$has_last_used" "false"
+}
+
+@test "init_session_tracking recreates an active session from an inactive payload" {
+    echo '{"session_id":"","reset_at":"2026-03-13T09:10:53+00:00","reset_reason":"permission_denied"}' > "$RALPH_SESSION_FILE"
+
+    init_session_tracking
+
+    local session_id
+    session_id=$(jq -r '.session_id' "$RALPH_SESSION_FILE")
+    [[ -n "$session_id" ]]
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    [[ "$created_at" != "null" && -n "$created_at" ]]
+}
+
+@test "init_session_tracking recreates an active session from a legacy reset payload" {
+    echo '{"session_id":"","created_at":"","last_used":"","reset_at":"2026-03-13T09:10:53+00:00","reset_reason":"permission_denied"}' > "$RALPH_SESSION_FILE"
+
+    init_session_tracking
+
+    local session_id
+    session_id=$(jq -r '.session_id' "$RALPH_SESSION_FILE")
+    [[ -n "$session_id" ]]
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    [[ "$created_at" != "null" && -n "$created_at" ]]
+}
+
+@test "init_session_tracking recreates an active session from an invalid active payload" {
+    echo '{"session_id":"ses-abc-123","created_at":"not-a-date","last_used":"2026-03-13T09:10:53+00:00"}' > "$RALPH_SESSION_FILE"
+
+    init_session_tracking
+
+    local session_id
+    session_id=$(jq -r '.session_id' "$RALPH_SESSION_FILE")
+    [[ "$session_id" != "ses-abc-123" && -n "$session_id" ]]
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    [[ "$created_at" != "not-a-date" && -n "$created_at" ]]
+}
+
+@test "init_session_tracking recreates an active session from a future active payload" {
+    echo '{"session_id":"ses-abc-123","created_at":"2999-01-01T00:00:00Z","last_used":"2026-03-13T09:10:53+00:00"}' > "$RALPH_SESSION_FILE"
+
+    init_session_tracking
+
+    local session_id
+    session_id=$(jq -r '.session_id' "$RALPH_SESSION_FILE")
+    [[ "$session_id" != "ses-abc-123" && -n "$session_id" ]]
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE")
+    [[ "$created_at" != "2999-01-01T00:00:00Z" && -n "$created_at" ]]
+}
+
+@test "update_session_last_used leaves inactive payloads unchanged" {
+    echo '{"session_id":"","reset_at":"2026-03-13T09:10:53+00:00","reset_reason":"permission_denied"}' > "$RALPH_SESSION_FILE"
+
+    update_session_last_used
+
+    local has_last_used
+    has_last_used=$(jq 'has("last_used")' "$RALPH_SESSION_FILE")
+    assert_equal "$has_last_used" "false"
 }
 
 # ===========================================================================

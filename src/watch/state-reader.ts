@@ -181,12 +181,7 @@ export async function readSessionInfo(projectDir: string): Promise<SessionInfo |
     return null;
   }
 
-  if (!result.value.session_id || !result.value.created_at) {
-    return null;
-  }
-
-  if (Number.isNaN(new Date(result.value.created_at).getTime())) {
-    debug("Failed to read session info: invalid created_at timestamp");
+  if (result.value.kind !== "active") {
     return null;
   }
 

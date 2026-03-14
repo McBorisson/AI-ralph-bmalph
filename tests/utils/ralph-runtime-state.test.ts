@@ -428,11 +428,76 @@ describe("ralph-runtime-state", () => {
         kind: "ok",
         path: join(testDir, ".ralph", ".ralph_session"),
         value: {
+          kind: "active",
           session_id: "sess-123",
           created_at: "2026-03-01T10:00:00.000Z",
           last_used: "2026-03-01T10:05:00.000Z",
         },
       });
+    });
+
+    it("reads an inactive Ralph session payload", async () => {
+      testDir = makeTmpDir();
+      const ralphDir = join(testDir, ".ralph");
+      await mkdir(ralphDir, { recursive: true });
+      await writeJson(join(ralphDir, ".ralph_session"), {
+        session_id: "",
+        reset_at: "2026-03-01T10:00:00.000Z",
+        reset_reason: "permission_denied",
+      });
+
+      const result = await readRalphRuntimeSession(testDir);
+
+      expect(result).toEqual({
+        kind: "ok",
+        path: join(testDir, ".ralph", ".ralph_session"),
+        value: {
+          kind: "inactive",
+          session_id: "",
+          reset_at: "2026-03-01T10:00:00.000Z",
+          reset_reason: "permission_denied",
+        },
+      });
+    });
+
+    it("normalizes a legacy reset payload with stray timestamps to inactive", async () => {
+      testDir = makeTmpDir();
+      const ralphDir = join(testDir, ".ralph");
+      await mkdir(ralphDir, { recursive: true });
+      await writeJson(join(ralphDir, ".ralph_session"), {
+        session_id: "",
+        created_at: "",
+        last_used: "",
+        reset_at: "2026-03-01T10:00:00.000Z",
+        reset_reason: "permission_denied",
+      });
+
+      const result = await readRalphRuntimeSession(testDir);
+
+      expect(result).toEqual({
+        kind: "ok",
+        path: join(testDir, ".ralph", ".ralph_session"),
+        value: {
+          kind: "inactive",
+          session_id: "",
+          reset_at: "2026-03-01T10:00:00.000Z",
+          reset_reason: "permission_denied",
+        },
+      });
+    });
+
+    it("returns invalid for an active session with an unparsable created_at", async () => {
+      testDir = makeTmpDir();
+      const ralphDir = join(testDir, ".ralph");
+      await mkdir(ralphDir, { recursive: true });
+      await writeJson(join(ralphDir, ".ralph_session"), {
+        session_id: "sess-123",
+        created_at: "not-a-date",
+      });
+
+      const result = await readRalphRuntimeSession(testDir);
+
+      expect(result.kind).toBe("invalid");
     });
   });
 

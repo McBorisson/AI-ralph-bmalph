@@ -1034,6 +1034,7 @@ save_claude_session() {
         session_id=$(extract_session_id_from_output "$output_file" 2>/dev/null || echo "")
         if [[ -n "$session_id" && "$session_id" != "null" ]]; then
             echo "$session_id" > "$CLAUDE_SESSION_FILE"
+            sync_ralph_session_with_driver "$session_id"
             log_status "INFO" "Saved session: ${session_id:0:20}..."
         fi
     fi
@@ -1042,6 +1043,101 @@ save_claude_session() {
 # =============================================================================
 # SESSION LIFECYCLE MANAGEMENT FUNCTIONS (Phase 1.2)
 # =============================================================================
+
+write_active_ralph_session() {
+    local session_id=$1
+    local created_at=$2
+    local last_used=${3:-$created_at}
+
+    jq -n \
+        --arg session_id "$session_id" \
+        --arg created_at "$created_at" \
+        --arg last_used "$last_used" \
+        '{
+            session_id: $session_id,
+            created_at: $created_at,
+            last_used: $last_used
+        }' > "$RALPH_SESSION_FILE"
+}
+
+write_inactive_ralph_session() {
+    local reset_at=$1
+    local reset_reason=$2
+
+    jq -n \
+        --arg session_id "" \
+        --arg reset_at "$reset_at" \
+        --arg reset_reason "$reset_reason" \
+        '{
+            session_id: $session_id,
+            reset_at: $reset_at,
+            reset_reason: $reset_reason
+        }' > "$RALPH_SESSION_FILE"
+}
+
+get_ralph_session_state() {
+    if [[ ! -f "$RALPH_SESSION_FILE" ]]; then
+        echo "missing"
+        return 0
+    fi
+
+    if ! jq empty "$RALPH_SESSION_FILE" 2>/dev/null; then
+        echo "invalid"
+        return 0
+    fi
+
+    local session_id_type
+    session_id_type=$(
+        jq -r 'if has("session_id") then (.session_id | type) else "missing" end' \
+            "$RALPH_SESSION_FILE" 2>/dev/null
+    ) || {
+        echo "invalid"
+        return 0
+    }
+
+    if [[ "$session_id_type" != "string" ]]; then
+        echo "invalid"
+        return 0
+    fi
+
+    local session_id
+    session_id=$(jq -r '.session_id' "$RALPH_SESSION_FILE" 2>/dev/null) || {
+        echo "invalid"
+        return 0
+    }
+
+    if [[ "$session_id" == "" ]]; then
+        echo "inactive"
+        return 0
+    fi
+
+    local created_at_type
+    created_at_type=$(
+        jq -r 'if has("created_at") then (.created_at | type) else "missing" end' \
+            "$RALPH_SESSION_FILE" 2>/dev/null
+    ) || {
+        echo "invalid"
+        return 0
+    }
+
+    if [[ "$created_at_type" != "string" ]]; then
+        echo "invalid"
+        return 0
+    fi
+
+    local created_at
+    created_at=$(jq -r '.created_at' "$RALPH_SESSION_FILE" 2>/dev/null) || {
+        echo "invalid"
+        return 0
+    }
+
+    if ! is_usable_ralph_session_created_at "$created_at"; then
+        echo "invalid"
+        return 0
+    fi
+
+    echo "active"
+}
 
 # Get current session ID from Ralph session file
 # Returns: session ID string or empty if not found
@@ -1064,6 +1160,65 @@ get_session_id() {
     return 0
 }
 
+is_usable_ralph_session_created_at() {
+    local created_at=$1
+    if [[ -z "$created_at" || "$created_at" == "null" ]]; then
+        return 1
+    fi
+
+    local created_at_epoch
+    created_at_epoch=$(parse_iso_to_epoch_strict "$created_at") || return 1
+
+    local now_epoch
+    now_epoch=$(get_epoch_seconds)
+
+    [[ "$created_at_epoch" -le "$now_epoch" ]]
+}
+
+get_active_session_created_at() {
+    if [[ "$(get_ralph_session_state)" != "active" ]]; then
+        echo ""
+        return 0
+    fi
+
+    local created_at
+    created_at=$(jq -r '.created_at // ""' "$RALPH_SESSION_FILE" 2>/dev/null)
+    if [[ "$created_at" == "null" ]]; then
+        created_at=""
+    fi
+
+    if ! is_usable_ralph_session_created_at "$created_at"; then
+        echo ""
+        return 0
+    fi
+
+    echo "$created_at"
+}
+
+sync_ralph_session_with_driver() {
+    local driver_session_id=$1
+    if [[ -z "$driver_session_id" || "$driver_session_id" == "null" ]]; then
+        return 0
+    fi
+
+    local ts
+    ts=$(get_iso_timestamp)
+
+    if [[ "$(get_ralph_session_state)" == "active" ]]; then
+        local current_session_id
+        current_session_id=$(get_session_id)
+        local current_created_at
+        current_created_at=$(get_active_session_created_at)
+
+        if [[ "$current_session_id" == "$driver_session_id" && -n "$current_created_at" ]]; then
+            write_active_ralph_session "$driver_session_id" "$current_created_at" "$ts"
+            return 0
+        fi
+    fi
+
+    write_active_ralph_session "$driver_session_id" "$ts" "$ts"
+}
+
 # Reset session with reason logging
 # Usage: reset_session "reason_for_reset"
 reset_session() {
@@ -1073,20 +1228,7 @@ reset_session() {
     local reset_timestamp
     reset_timestamp=$(get_iso_timestamp)
 
-    # Always create/overwrite the session file using jq for safe JSON escaping
-    jq -n \
-        --arg session_id "" \
-        --arg created_at "" \
-        --arg last_used "" \
-        --arg reset_at "$reset_timestamp" \
-        --arg reset_reason "$reason" \
-        '{
-            session_id: $session_id,
-            created_at: $created_at,
-            last_used: $last_used,
-            reset_at: $reset_at,
-            reset_reason: $reset_reason
-        }' > "$RALPH_SESSION_FILE"
+    write_inactive_ralph_session "$reset_timestamp" "$reason"
 
     # Also clear the Claude session file for consistency
     rm -f "$CLAUDE_SESSION_FILE" 2>/dev/null
@@ -1175,67 +1317,39 @@ init_session_tracking() {
     local ts
     ts=$(get_iso_timestamp)
 
-    # Create session file if it doesn't exist
-    if [[ ! -f "$RALPH_SESSION_FILE" ]]; then
-        local new_session_id
-        new_session_id=$(generate_session_id)
-
-        jq -n \
-            --arg session_id "$new_session_id" \
-            --arg created_at "$ts" \
-            --arg last_used "$ts" \
-            --arg reset_at "" \
-            --arg reset_reason "" \
-            '{
-                session_id: $session_id,
-                created_at: $created_at,
-                last_used: $last_used,
-                reset_at: $reset_at,
-                reset_reason: $reset_reason
-            }' > "$RALPH_SESSION_FILE"
-
-        log_status "INFO" "Initialized session tracking (session: $new_session_id)"
+    local session_state
+    session_state=$(get_ralph_session_state)
+    if [[ "$session_state" == "active" ]]; then
         return 0
     fi
 
-    # Validate existing session file
-    if ! jq empty "$RALPH_SESSION_FILE" 2>/dev/null; then
+    if [[ "$session_state" == "invalid" ]]; then
         log_status "WARN" "Corrupted session file detected, recreating..."
-        local new_session_id
-        new_session_id=$(generate_session_id)
-
-        jq -n \
-            --arg session_id "$new_session_id" \
-            --arg created_at "$ts" \
-            --arg last_used "$ts" \
-            --arg reset_at "$ts" \
-            --arg reset_reason "corrupted_file_recovery" \
-            '{
-                session_id: $session_id,
-                created_at: $created_at,
-                last_used: $last_used,
-                reset_at: $reset_at,
-                reset_reason: $reset_reason
-            }' > "$RALPH_SESSION_FILE"
     fi
+
+    local new_session_id
+    new_session_id=$(generate_session_id)
+    write_active_ralph_session "$new_session_id" "$ts" "$ts"
+
+    log_status "INFO" "Initialized session tracking (session: $new_session_id)"
 }
 
 # Update last_used timestamp in session file (called on each loop iteration)
 update_session_last_used() {
-    if [[ ! -f "$RALPH_SESSION_FILE" ]]; then
+    if [[ "$(get_ralph_session_state)" != "active" ]]; then
         return 0
     fi
 
     local ts
     ts=$(get_iso_timestamp)
 
-    # Update last_used in existing session file
-    local updated
-    updated=$(jq --arg last_used "$ts" '.last_used = $last_used' "$RALPH_SESSION_FILE" 2>/dev/null)
-    local jq_status=$?
+    local session_id
+    session_id=$(get_session_id)
+    local created_at
+    created_at=$(get_active_session_created_at)
 
-    if [[ $jq_status -eq 0 && -n "$updated" ]]; then
-        echo "$updated" > "$RALPH_SESSION_FILE"
+    if [[ -n "$session_id" && -n "$created_at" ]]; then
+        write_active_ralph_session "$session_id" "$created_at" "$ts"
     fi
 }
 

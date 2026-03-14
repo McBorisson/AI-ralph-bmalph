@@ -80,7 +80,7 @@ export async function checkRalphSession(projectDir: string): Promise<CheckResult
   }
 
   const session = result.value;
-  if (!session.session_id) {
+  if (session.kind === "inactive") {
     return { label, passed: true, detail: "no active session" };
   }
 

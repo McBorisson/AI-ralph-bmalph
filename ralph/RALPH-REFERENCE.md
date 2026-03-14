@@ -97,7 +97,7 @@ This applies to every driver that exposes resumable IDs today:
 
 | File | Purpose |
 |------|---------|
-| `.ralph/.ralph_session` | Current session ID and timestamps |
+| `.ralph/.ralph_session` | Current Ralph session state (active or reset/inactive) |
 | `.ralph/.ralph_session_history` | History of last 50 session transitions |
 | `.ralph/.claude_session_id` | Persisted driver session ID (shared filename for historical reasons; used by Claude Code, Codex, and Cursor) |
 
@@ -119,13 +119,23 @@ Sessions expire after 24 hours (configurable via `SESSION_EXPIRY_HOURS` in `.ral
 
 ### Session State Structure
 
+Active session payload:
+
 ```json
 {
   "session_id": "uuid-string",
   "created_at": "ISO-timestamp",
-  "last_used": "ISO-timestamp",
-  "reset_at": "ISO-timestamp (if reset)",
-  "reset_reason": "reason string (if reset)"
+  "last_used": "ISO-timestamp"
+}
+```
+
+Reset/inactive payload:
+
+```json
+{
+  "session_id": "",
+  "reset_at": "ISO-timestamp",
+  "reset_reason": "reason string"
 }
 ```
 

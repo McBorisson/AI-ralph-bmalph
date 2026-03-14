@@ -201,6 +201,7 @@ describe("validateRalphSession", () => {
       created_at: "2025-01-01T00:00:00.000Z",
     };
     const result = validateRalphSession(data);
+    expect(result.kind).toBe("active");
     expect(result.session_id).toBe("abc123");
     expect(result.created_at).toBe("2025-01-01T00:00:00.000Z");
   });
@@ -212,6 +213,7 @@ describe("validateRalphSession", () => {
       last_used: "2025-01-01T01:00:00.000Z",
     };
     const result = validateRalphSession(data);
+    expect(result.kind).toBe("active");
     expect(result.last_used).toBe("2025-01-01T01:00:00.000Z");
   });
 
@@ -225,10 +227,40 @@ describe("validateRalphSession", () => {
     expect(() => validateRalphSession(data)).toThrow(/created_at/i);
   });
 
-  it("allows empty session_id", () => {
+  it("normalizes empty session_id with reset metadata to an inactive session", () => {
+    const data = {
+      session_id: "",
+      reset_at: "2025-01-01T00:05:00.000Z",
+      reset_reason: "permission_denied",
+    };
+    const result = validateRalphSession(data);
+    expect(result.kind).toBe("inactive");
+    expect(result.session_id).toBe("");
+    expect(result.reset_reason).toBe("permission_denied");
+  });
+
+  it("normalizes legacy reset payloads with stray timestamps to inactive", () => {
+    const data = {
+      session_id: "",
+      created_at: "",
+      last_used: "",
+      reset_at: "2025-01-01T00:05:00.000Z",
+      reset_reason: "permission_denied",
+    };
+    const result = validateRalphSession(data);
+    expect(result.kind).toBe("inactive");
+    expect(result.session_id).toBe("");
+  });
+
+  it("treats empty session_id as inactive even when created_at looks valid", () => {
     const data = { session_id: "", created_at: "2025-01-01T00:00:00.000Z" };
     const result = validateRalphSession(data);
-    expect(result.session_id).toBe("");
+    expect(result.kind).toBe("inactive");
+  });
+
+  it("throws when active created_at cannot be parsed", () => {
+    const data = { session_id: "abc", created_at: "not-a-date" };
+    expect(() => validateRalphSession(data)).toThrow(/created_at/i);
   });
 });
 

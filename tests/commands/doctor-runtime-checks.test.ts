@@ -67,15 +67,20 @@ function circuitBreakerResult(
 
 function sessionResult(
   overrides: Partial<{
+    kind: "active" | "inactive";
     session_id: string;
     created_at: string;
     last_used?: string;
+    reset_at?: string;
+    reset_reason?: string;
   }> = {}
 ) {
+  const kind = overrides.kind ?? (overrides.session_id === "" ? "inactive" : "active");
   return {
     kind: "ok" as const,
     path: "/projects/webapp/.ralph/.ralph_session",
     value: {
+      kind,
       session_id: "sess-2025-abc123",
       created_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
       ...overrides,
@@ -346,19 +351,27 @@ describe("checkRalphSession", () => {
   });
 
   it("fails when session timestamp cannot be parsed", async () => {
-    mockReadRalphRuntimeSession.mockResolvedValue(sessionResult({ created_at: "not-a-date" }));
+    mockReadRalphRuntimeSession.mockResolvedValue({
+      kind: "invalid",
+      path: "/projects/webapp/.ralph/.ralph_session",
+      error: new Error("Invalid active session timestamp"),
+    });
 
     const result = await checkRalphSession("/projects/webapp");
 
     expect(result.passed).toBe(false);
   });
 
-  it("reports 'invalid timestamp' for unparsable session timestamps", async () => {
-    mockReadRalphRuntimeSession.mockResolvedValue(sessionResult({ created_at: "not-a-date" }));
+  it("reports corrupt session file for unparsable active session timestamps", async () => {
+    mockReadRalphRuntimeSession.mockResolvedValue({
+      kind: "invalid",
+      path: "/projects/webapp/.ralph/.ralph_session",
+      error: new Error("Invalid active session timestamp"),
+    });
 
     const result = await checkRalphSession("/projects/webapp");
 
-    expect(result.detail).toBe("invalid timestamp");
+    expect(result.detail).toBe("corrupt session file");
   });
 
   it("passes with 'no active session' when session_id is empty", async () => {
@@ -378,6 +391,23 @@ describe("checkRalphSession", () => {
 
     const result = await checkRalphSession("/projects/webapp");
 
+    expect(result.detail).toBe("no active session");
+  });
+
+  it("passes with 'no active session' for the new inactive session payload", async () => {
+    mockReadRalphRuntimeSession.mockResolvedValue(
+      sessionResult({
+        kind: "inactive",
+        session_id: "",
+        created_at: "",
+        reset_at: "2025-06-15T10:30:00.000Z",
+        reset_reason: "permission_denied",
+      })
+    );
+
+    const result = await checkRalphSession("/projects/webapp");
+
+    expect(result.passed).toBe(true);
     expect(result.detail).toBe("no active session");
   });
 

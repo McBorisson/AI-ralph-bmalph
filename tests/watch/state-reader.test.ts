@@ -546,6 +546,36 @@ describe("state-reader", () => {
       expect(info).toBeNull();
     });
 
+    it("returns null when session file contains the new inactive payload", async () => {
+      testDir = makeTmpDir();
+      const ralphDir = join(testDir, ".ralph");
+      await mkdir(ralphDir, { recursive: true });
+      await writeJson(join(ralphDir, ".ralph_session"), {
+        session_id: "",
+        reset_at: "2026-02-25T12:15:00Z",
+        reset_reason: "manual_reset",
+      });
+
+      const info = await readSessionInfo(testDir);
+
+      expect(info).toBeNull();
+    });
+
+    it("returns null when session_id is empty even if created_at looks valid", async () => {
+      testDir = makeTmpDir();
+      const ralphDir = join(testDir, ".ralph");
+      await mkdir(ralphDir, { recursive: true });
+      await writeJson(join(ralphDir, ".ralph_session"), {
+        session_id: "",
+        created_at: "2026-02-25T10:00:00Z",
+        last_used: "2026-02-25T12:15:00Z",
+      });
+
+      const info = await readSessionInfo(testDir);
+
+      expect(info).toBeNull();
+    });
+
     it("returns null when created_at is missing", async () => {
       testDir = makeTmpDir();
       const ralphDir = join(testDir, ".ralph");
