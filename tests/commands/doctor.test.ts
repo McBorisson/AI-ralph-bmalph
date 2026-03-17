@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { CheckDefinition, CheckResult } from "../../src/commands/doctor.js";
 
 vi.mock("chalk");
 
@@ -81,10 +82,6 @@ describe("doctor command", { timeout: 15000 }, () => {
   afterEach(async () => {
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();
-    vi.doUnmock("../../src/platform/resolve.js");
-    vi.doUnmock("../../src/commands/doctor-checks.js");
-    vi.doUnmock("../../src/commands/doctor-health-checks.js");
-    vi.doUnmock("../../src/commands/doctor-runtime-checks.js");
     vi.restoreAllMocks();
     try {
       await rm(testDir, { recursive: true, force: true });
@@ -177,8 +174,9 @@ describe("doctor command", { timeout: 15000 }, () => {
       const order: string[] = [];
       let activeCheck: string | null = null;
 
-      const createCheck =
-        (id: string, label: string) => async (): Promise<{ label: string; passed: boolean }> => {
+      const createCheck = (id: string, label: string): CheckDefinition => ({
+        id,
+        run: async (): Promise<CheckResult> => {
           if (activeCheck) {
             throw new Error(`check overlap: ${activeCheck} and ${id}`);
           }
@@ -189,70 +187,20 @@ describe("doctor command", { timeout: 15000 }, () => {
           activeCheck = null;
 
           return { label, passed: true };
-        };
+        },
+      });
 
-      vi.doMock("../../src/platform/resolve.js", () => ({
-        resolveProjectPlatform: vi.fn(async () => ({
-          getDoctorChecks: () => [
-            {
-              id: "platform-one",
-              label: "platform one",
-              check: createCheck("platform-one", "platform one"),
-            },
-            {
-              id: "platform-two",
-              label: "platform two",
-              check: createCheck("platform-two", "platform two"),
-            },
-          ],
-        })),
-      }));
-
-      vi.doMock("../../src/commands/doctor-checks.js", () => ({
-        checkNodeVersion: createCheck("node-version", "Node version >= 20"),
-        checkBash: createCheck("bash-available", "bash available"),
-        checkJq: createCheck("jq-available", "jq available"),
-        checkConfig: createCheck("config-valid", "bmalph/config.json exists and valid"),
-        checkBmadDir: createCheck("bmad-dir", "_bmad/ directory present"),
-        checkRalphLoop: createCheck("ralph-loop", "ralph_loop.sh present and has content"),
-        checkRalphLib: createCheck("ralph-lib", ".ralph/lib/ directory present"),
-      }));
-
-      vi.doMock("../../src/commands/doctor-health-checks.js", () => ({
-        checkGitignore: createCheck("gitignore", ".gitignore contains bmalph entries"),
-        checkVersionMarker: createCheck("version-marker", "version marker present"),
-        checkUpstreamVersions: createCheck("upstream-versions", "upstream versions recorded"),
-      }));
-
-      vi.doMock("../../src/commands/doctor-runtime-checks.js", () => ({
-        checkCircuitBreaker: createCheck("circuit-breaker", "circuit breaker healthy"),
-        checkRalphSession: createCheck("ralph-session", "ralph session healthy"),
-        checkApiCalls: createCheck("api-calls", "api call tracking healthy"),
-        checkUpstreamGitHubStatus: createCheck("upstream-github", "GitHub status healthy"),
-      }));
+      const fakeChecks: CheckDefinition[] = [
+        createCheck("check-a", "Check A"),
+        createCheck("check-b", "Check B"),
+        createCheck("check-c", "Check C"),
+      ];
 
       const { runDoctor } = await import("../../src/commands/doctor.js");
-      const result = await runDoctor({ projectDir: testDir });
+      const result = await runDoctor({ projectDir: testDir }, fakeChecks);
 
       expect(result.failed).toBe(0);
-      expect(order).toEqual([
-        "node-version",
-        "bash-available",
-        "jq-available",
-        "config-valid",
-        "bmad-dir",
-        "ralph-loop",
-        "ralph-lib",
-        "platform-one",
-        "platform-two",
-        "gitignore",
-        "version-marker",
-        "upstream-versions",
-        "circuit-breaker",
-        "ralph-session",
-        "api-calls",
-        "upstream-github",
-      ]);
+      expect(order).toEqual(["check-a", "check-b", "check-c"]);
     });
   });
 

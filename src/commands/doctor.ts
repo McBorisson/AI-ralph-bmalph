@@ -56,10 +56,18 @@ export async function doctorCommand(options: DoctorOptions): Promise<void> {
   });
 }
 
-export async function runDoctor(options: DoctorOptions): Promise<DoctorResult> {
+export async function runDoctor(
+  options: DoctorOptions,
+  checksOverride?: CheckDefinition[]
+): Promise<DoctorResult> {
   const projectDir = options.projectDir;
-  const platform = await resolveProjectPlatform(projectDir);
-  const checks = buildCheckRegistry(platform);
+  let checks: CheckDefinition[];
+  if (checksOverride) {
+    checks = checksOverride;
+  } else {
+    const platform = await resolveProjectPlatform(projectDir);
+    checks = buildCheckRegistry(platform);
+  }
   const results: CheckResult[] = [];
 
   for (const check of checks) {
