@@ -500,7 +500,7 @@ function hasAnyData(state: DashboardState): boolean {
     state.analysis !== null ||
     state.execution !== null ||
     state.session !== null ||
-    state.review != null ||
+    state.review !== null ||
     state.recentLogs.length > 0 ||
     state.liveLog.length > 0
   );
