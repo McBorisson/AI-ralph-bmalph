@@ -649,6 +649,44 @@ validate_claude_permission_mode() {
     esac
 }
 
+validate_git_repo() {
+    if ! command -v git &>/dev/null; then
+        log_status "ERROR" "git is not installed or not on PATH."
+        echo ""
+        echo "Ralph requires git for progress detection."
+        echo ""
+        echo "Install git:"
+        echo "  macOS:   brew install git  (or: xcode-select --install)"
+        echo "  Ubuntu:  sudo apt-get install git"
+        echo "  Windows: https://git-scm.com/downloads"
+        echo ""
+        echo "After installing, run this command again."
+        return 1
+    fi
+
+    if ! git rev-parse --git-dir &>/dev/null 2>&1; then
+        log_status "ERROR" "No git repository found in $(pwd)."
+        echo ""
+        echo "Ralph requires a git repository for progress detection."
+        echo ""
+        echo "To fix this, run:"
+        echo "  git init && git add -A && git commit -m 'initial commit'"
+        return 1
+    fi
+
+    if ! git rev-parse HEAD &>/dev/null 2>&1; then
+        log_status "ERROR" "Git repository has no commits."
+        echo ""
+        echo "Ralph requires at least one commit for progress detection."
+        echo ""
+        echo "To fix this, run:"
+        echo "  git add -A && git commit -m 'initial commit'"
+        return 1
+    fi
+
+    return 0
+}
+
 warn_if_allowed_tools_ignored() {
     if driver_supports_tool_allowlist; then
         return 0
@@ -2579,6 +2617,11 @@ main() {
         echo "  Windows: choco install jq  (or: winget install jqlang.jq)"
         echo ""
         echo "After installing, run this command again."
+        exit 1
+    fi
+
+    # Check for git repository (required for progress detection)
+    if ! validate_git_repo; then
         exit 1
     fi
 

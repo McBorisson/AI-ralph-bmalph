@@ -531,6 +531,64 @@ teardown() {
 }
 
 # ===========================================================================
+# validate_git_repo
+# ===========================================================================
+
+@test "validate_git_repo succeeds in a valid git repo with commits" {
+    local test_repo
+    test_repo="$(mktemp -d)"
+    git -C "$test_repo" init --quiet
+    git -C "$test_repo" config user.email "test@test.com"
+    git -C "$test_repo" config user.name "Test"
+    touch "$test_repo/file.txt"
+    git -C "$test_repo" add .
+    git -C "$test_repo" commit --quiet -m "initial"
+
+    cd "$test_repo"
+    run validate_git_repo
+    assert_success
+
+    rm -rf "$test_repo"
+}
+
+@test "validate_git_repo fails when not in a git repo" {
+    local test_dir
+    test_dir="$(mktemp -d)"
+
+    cd "$test_dir"
+    run validate_git_repo
+    assert_failure
+    assert_output --partial "git init"
+
+    rm -rf "$test_dir"
+}
+
+@test "validate_git_repo fails when git repo has no commits" {
+    local test_repo
+    test_repo="$(mktemp -d)"
+    git -C "$test_repo" init --quiet
+
+    cd "$test_repo"
+    run validate_git_repo
+    assert_failure
+    assert_output --partial "commit"
+
+    rm -rf "$test_repo"
+}
+
+@test "validate_git_repo fails when git is not on PATH" {
+    local test_dir
+    test_dir="$(mktemp -d)"
+
+    cd "$test_dir"
+    PATH="" run validate_git_repo
+    assert_failure
+    assert_output --partial "git"
+
+    rm -rf "$test_dir"
+}
+
+# ===========================================================================
 # build_loop_context
 # ===========================================================================
 
