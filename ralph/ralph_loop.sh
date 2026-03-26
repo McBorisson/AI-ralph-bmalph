@@ -1401,7 +1401,15 @@ build_loop_context() {
             local test_gate_status
             test_gate_status=$(jq -r '.test_gate.status // "skip"' "$QUALITY_GATE_RESULTS_FILE" 2>/dev/null)
             if [[ "$test_gate_status" == "fail" ]]; then
-                context+="TESTS FAILING. "
+                local test_output
+                test_output=$(jq -r '.test_gate.output // ""' "$QUALITY_GATE_RESULTS_FILE" 2>/dev/null)
+                # Sanitize: strip ANSI escapes, collapse whitespace, trim
+                test_output=$(printf '%s' "$test_output" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr '\n\t\r' '   ' | sed 's/  */ /g;s/^ //;s/ $//')
+                if [[ -n "$test_output" ]]; then
+                    context+="TESTS FAILING: ${test_output:0:150}. "
+                else
+                    context+="TESTS FAILING. "
+                fi
             fi
 
             local failed_gates
