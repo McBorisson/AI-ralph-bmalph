@@ -10,7 +10,23 @@ set -e  # Exit on any error
 # via --allowedTools flag in CLAUDE_CMD_ARGS, which is the proper approach.
 # Exporting sandbox variables without a verified sandbox would be misleading.
 
-# Source library components
+# validate_ralph_dir - Reject dangerous RALPH_DIR values (#79)
+# Accepts: ".ralph" (default), empty (becomes .ralph), absolute paths (tests)
+# Rejects: paths with ".." (traversal), non-default relative paths
+validate_ralph_dir() {
+    local dir="$1"
+    [[ "$dir" == ".ralph" || -z "$dir" ]] && return 0
+    [[ "$dir" == *".."* ]] && { echo "Error: RALPH_DIR must not contain '..': '$dir'" >&2; return 1; }
+    [[ "$dir" != /* ]] && { echo "Error: RALPH_DIR must be '.ralph' or an absolute path, got: '$dir'" >&2; return 1; }
+    return 0
+}
+
+# Validate and default RALPH_DIR BEFORE sourcing libraries that depend on it
+validate_ralph_dir "${RALPH_DIR:-}" || exit 1
+RALPH_DIR="${RALPH_DIR:-.ralph}"
+export RALPH_DIR
+
+# Source library components (RALPH_DIR must be set before this point)
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 source "$SCRIPT_DIR/lib/date_utils.sh"
 source "$SCRIPT_DIR/lib/timeout_utils.sh"
@@ -20,7 +36,57 @@ source "$SCRIPT_DIR/lib/write_heartbeat.sh"
 
 # Configuration
 # Ralph-specific files live in .ralph/ subfolder
-RALPH_DIR="${RALPH_DIR:-.ralph}"
+
+# Allowlist of known .ralphrc config keys (#76)
+# Space-delimited string (avoids declare -A scoping issues when sourced)
+RALPHRC_ALLOWED_KEYS=" PLATFORM_DRIVER PROJECT_NAME PROJECT_TYPE MAX_CALLS_PER_HOUR CLAUDE_TIMEOUT_MINUTES CLAUDE_OUTPUT_FORMAT WRITE_TIMEOUT_MINUTES ALLOWED_TOOLS CLAUDE_PERMISSION_MODE PERMISSION_DENIAL_MODE SESSION_CONTINUITY SESSION_EXPIRY_HOURS TASK_SOURCES GITHUB_TASK_LABEL BEADS_FILTER CB_NO_PROGRESS_THRESHOLD CB_SAME_ERROR_THRESHOLD CB_OUTPUT_DECLINE_THRESHOLD CB_READ_ONLY_TIMEOUT_THRESHOLD CB_COOLDOWN_MINUTES CB_AUTO_RESET TEST_COMMAND QUALITY_GATES QUALITY_GATE_MODE QUALITY_GATE_TIMEOUT QUALITY_GATE_ON_COMPLETION_ONLY REVIEW_MODE REVIEW_ENABLED REVIEW_INTERVAL CLAUDE_MIN_VERSION RALPH_VERBOSE PROMPT_FILE FIX_PLAN_FILE AGENT_FILE "
+
+# parse_ralphrc - Safely parse .ralphrc as key=value config (#76)
+# Rejects command substitution ($(), backticks). Only sets allowlisted keys.
+parse_ralphrc() {
+    local config_file="$1"
+    local line_num=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line_num=$((line_num + 1))
+        # Strip leading/trailing whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        # Skip empty lines and comments
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        # Reject command substitution ($() and backticks)
+        if [[ "$line" == *'$('* ]] || [[ "$line" == *'`'* ]]; then
+            log_status "WARN" ".ralphrc:$line_num: rejected (command substitution): $line"
+            continue
+        fi
+        # Match KEY=VALUE
+        if [[ "$line" =~ ^([A-Z_][A-Z0-9_]*)=(.*) ]]; then
+            local key="${BASH_REMATCH[1]}"
+            local raw_value="${BASH_REMATCH[2]}"
+            # Check allowlist
+            if [[ "$RALPHRC_ALLOWED_KEYS" != *" $key "* ]]; then
+                log_status "WARN" ".ralphrc:$line_num: unknown key ignored: $key"
+                continue
+            fi
+            # Strip outer quotes
+            local value="$raw_value"
+            if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            fi
+            # Handle ${VAR:-default} and ${VAR:-} (empty default)
+            if [[ "$value" =~ ^\$\{([A-Z_][A-Z0-9_]*):-([^}]*)\}$ ]]; then
+                local ref_var="${BASH_REMATCH[1]}"
+                local default_val="${BASH_REMATCH[2]}"
+                local current="${!ref_var:-}"
+                value="${current:-$default_val}"
+            fi
+            printf -v "$key" '%s' "$value"
+        else
+            log_status "WARN" ".ralphrc:$line_num: skipped (not KEY=VALUE): $line"
+        fi
+    done < "$config_file"
+}
 PROMPT_FILE="$RALPH_DIR/PROMPT.md"
 LOG_DIR="$RALPH_DIR/logs"
 DOCS_DIR="$RALPH_DIR/docs/generated"
@@ -164,7 +230,7 @@ TEST_PERCENTAGE_THRESHOLD=30  # If more than 30% of recent loops are test-only, 
 # Ralph configuration file
 # bmalph installs .ralph/.ralphrc. Fall back to a project-root .ralphrc for
 # older standalone Ralph layouts.
-RALPHRC_FILE="${RALPHRC_FILE:-$RALPH_DIR/.ralphrc}"
+RALPHRC_FILE="$RALPH_DIR/.ralphrc"
 RALPHRC_LOADED=false
 
 # Platform driver (set from .ralphrc or environment)
@@ -214,9 +280,8 @@ load_ralphrc() {
         return 0
     fi
 
-    # Source config (this may override default values)
-    # shellcheck source=/dev/null
-    source "$config_file"
+    # Parse config as safe key=value pairs (#76 — no longer sourced as bash)
+    parse_ralphrc "$config_file"
 
     # Map config variable names to internal names
     if [[ -n "${ALLOWED_TOOLS:-}" ]]; then
@@ -300,6 +365,11 @@ driver_permission_denial_help() {
 
 # Source platform driver
 load_platform_driver() {
+    # Reject path traversal in PLATFORM_DRIVER (#77)
+    if [[ "$PLATFORM_DRIVER" =~ [/] ]] || [[ "$PLATFORM_DRIVER" == *".."* ]]; then
+        log_status "ERROR" "Invalid PLATFORM_DRIVER (path traversal): $PLATFORM_DRIVER"
+        return 1
+    fi
     local driver_file="$SCRIPT_DIR/drivers/${PLATFORM_DRIVER}.sh"
     if [[ ! -f "$driver_file" ]]; then
         log_status "ERROR" "Platform driver not found: $driver_file"

@@ -283,3 +283,21 @@ _wait_for_file() {
     run kill -0 "$monitor_pid"
     assert_failure
 }
+
+# ===========================================================================
+# RALPH_DIR guard
+# ===========================================================================
+
+@test "stop_write_heartbeat fails when RALPH_DIR is unset" {
+    unset RALPH_DIR
+    run stop_write_heartbeat
+    assert_failure
+    assert_output --partial "RALPH_DIR is not set"
+}
+
+@test "was_write_heartbeat_timeout fails when RALPH_DIR is unset" {
+    unset RALPH_DIR
+    run was_write_heartbeat_timeout
+    assert_failure
+    assert_output --partial "RALPH_DIR is not set"
+}

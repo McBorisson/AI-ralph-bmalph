@@ -12,8 +12,11 @@ CB_STATE_HALF_OPEN="HALF_OPEN"  # Monitoring mode, checking for recovery
 CB_STATE_OPEN="OPEN"            # Failure detected, execution halted
 
 # Circuit Breaker Configuration
-# Use RALPH_DIR if set by main script, otherwise default to .ralph
-RALPH_DIR="${RALPH_DIR:-.ralph}"
+# RALPH_DIR must be set by the caller (ralph_loop.sh validates it)
+if [[ -z "${RALPH_DIR:-}" ]]; then
+    echo "Error: RALPH_DIR is not set. Source ralph_loop.sh first." >&2
+    return 1
+fi
 CB_STATE_FILE="$RALPH_DIR/.circuit_breaker_state"
 CB_HISTORY_FILE="$RALPH_DIR/.circuit_breaker_history"
 # Configurable thresholds - override via environment variables:

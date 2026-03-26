@@ -124,6 +124,164 @@ _enable_assertions() {
 }
 
 # ===========================================================================
+# validate_ralph_dir
+# ===========================================================================
+
+@test "validate_ralph_dir accepts .ralph" {
+    _enable_assertions
+    run validate_ralph_dir ".ralph"
+    assert_success
+}
+
+@test "validate_ralph_dir accepts empty string (will default to .ralph)" {
+    _enable_assertions
+    run validate_ralph_dir ""
+    assert_success
+}
+
+@test "validate_ralph_dir accepts absolute path" {
+    _enable_assertions
+    run validate_ralph_dir "/tmp/bats-test-ralph"
+    assert_success
+}
+
+@test "validate_ralph_dir rejects path traversal" {
+    _enable_assertions
+    run validate_ralph_dir "../../etc"
+    assert_failure
+    assert_output --partial "must not contain '..'"
+}
+
+@test "validate_ralph_dir rejects relative non-default path" {
+    _enable_assertions
+    run validate_ralph_dir "foo/bar"
+    assert_failure
+    assert_output --partial "must be '.ralph' or an absolute path"
+}
+
+# ===========================================================================
+# load_platform_driver
+# ===========================================================================
+
+@test "load_platform_driver rejects path traversal" {
+    _enable_assertions
+    PLATFORM_DRIVER="../../evil"
+    run load_platform_driver
+    assert_failure
+    assert_output --partial "Invalid PLATFORM_DRIVER"
+}
+
+@test "load_platform_driver rejects slash in name" {
+    _enable_assertions
+    PLATFORM_DRIVER="foo/bar"
+    run load_platform_driver
+    assert_failure
+    assert_output --partial "Invalid PLATFORM_DRIVER"
+}
+
+@test "load_platform_driver rejects nonexistent driver" {
+    _enable_assertions
+    PLATFORM_DRIVER="nonexistent"
+    run load_platform_driver
+    assert_failure
+    assert_output --partial "not found"
+}
+
+# ===========================================================================
+# parse_ralphrc
+# ===========================================================================
+
+@test "parse_ralphrc sets known key" {
+    _enable_assertions
+    echo 'MAX_CALLS_PER_HOUR=50' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$MAX_CALLS_PER_HOUR" == "50" ]]
+}
+
+@test "parse_ralphrc handles double-quoted value" {
+    _enable_assertions
+    echo 'CLAUDE_OUTPUT_FORMAT="json"' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$CLAUDE_OUTPUT_FORMAT" == "json" ]]
+}
+
+@test "parse_ralphrc handles single-quoted value" {
+    _enable_assertions
+    echo "CLAUDE_OUTPUT_FORMAT='text'" > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$CLAUDE_OUTPUT_FORMAT" == "text" ]]
+}
+
+@test "parse_ralphrc handles \${VAR:-default} with env unset" {
+    _enable_assertions
+    unset PROJECT_NAME
+    echo 'PROJECT_NAME="${PROJECT_NAME:-my-project}"' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$PROJECT_NAME" == "my-project" ]]
+}
+
+@test "parse_ralphrc handles \${VAR:-default} with env set" {
+    _enable_assertions
+    export PROJECT_NAME="real-project"
+    echo 'PROJECT_NAME="${PROJECT_NAME:-my-project}"' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$PROJECT_NAME" == "real-project" ]]
+}
+
+@test "parse_ralphrc handles \${VAR:-} empty default" {
+    _enable_assertions
+    unset TEST_COMMAND
+    echo 'TEST_COMMAND="${TEST_COMMAND:-}"' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$TEST_COMMAND" == "" ]]
+}
+
+@test "parse_ralphrc allows semicolons in value" {
+    _enable_assertions
+    echo 'QUALITY_GATES="npm run lint;npm test"' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$QUALITY_GATES" == "npm run lint;npm test" ]]
+}
+
+@test "parse_ralphrc rejects command substitution" {
+    _enable_assertions
+    echo 'PROJECT_NAME=$(echo pwned)' > "$RALPH_DIR/test.conf"
+    MAX_CALLS_PER_HOUR=100
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    # PROJECT_NAME should not be set to the result of command substitution
+    [[ "${PROJECT_NAME:-}" != "pwned" ]]
+}
+
+@test "parse_ralphrc rejects backtick execution" {
+    _enable_assertions
+    echo 'PROJECT_NAME=`echo pwned`' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "${PROJECT_NAME:-}" != "pwned" ]]
+}
+
+@test "parse_ralphrc ignores unknown key with warning" {
+    _enable_assertions
+    echo 'UNKNOWN_KEY=foobar' > "$RALPH_DIR/test.conf"
+    run parse_ralphrc "$RALPH_DIR/test.conf"
+    assert_success
+    assert_output --partial "unknown key ignored"
+}
+
+@test "parse_ralphrc skips comments and blank lines" {
+    _enable_assertions
+    printf '# comment\n\nMAX_CALLS_PER_HOUR=42\n' > "$RALPH_DIR/test.conf"
+    parse_ralphrc "$RALPH_DIR/test.conf"
+    [[ "$MAX_CALLS_PER_HOUR" == "42" ]]
+}
+
+@test "RALPHRC_FILE env override is ignored" {
+    _enable_assertions
+    # After sourcing ralph_loop.sh, RALPHRC_FILE should be derived from RALPH_DIR
+    # not from an env var
+    [[ "$RALPHRC_FILE" == "$RALPH_DIR/.ralphrc" ]]
+}
+
+# ===========================================================================
 # load_ralphrc
 # ===========================================================================
 

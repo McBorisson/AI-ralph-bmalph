@@ -82,7 +82,11 @@ start_write_heartbeat() {
 # Stop the heartbeat monitor and clean up marker files.
 # Safe to call even if no monitor is running.
 stop_write_heartbeat() {
-    local ralph_dir="${RALPH_DIR:-.ralph}"
+    if [[ -z "${RALPH_DIR:-}" ]]; then
+        echo "Error: RALPH_DIR is not set" >&2
+        return 1
+    fi
+    local ralph_dir="$RALPH_DIR"
     local pid_file="$ralph_dir/.write_heartbeat_pid"
 
     if [[ -f "$pid_file" ]]; then
@@ -102,6 +106,10 @@ stop_write_heartbeat() {
 # Returns 0 (true) if the timeout marker exists.
 # Does NOT delete the marker — the caller is responsible for cleanup.
 was_write_heartbeat_timeout() {
-    local ralph_dir="${RALPH_DIR:-.ralph}"
+    if [[ -z "${RALPH_DIR:-}" ]]; then
+        echo "Error: RALPH_DIR is not set" >&2
+        return 1
+    fi
+    local ralph_dir="$RALPH_DIR"
     [[ -f "$ralph_dir/.write_heartbeat_triggered" ]]
 }
